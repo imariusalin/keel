@@ -14,3 +14,13 @@ export const Route = createFileRoute("/_panel")({
   },
   component: PanelLayout,
 });
+
+function PanelLayout() {
+  const data = Route.useLoaderData();
+  const { user, isPending } = useCurrentUserState();
+  if (isPending) {
+    return <div className="min-h-dvh bg-background" />;
+  }
+  if (!user) return <RedirectToSignIn />;
+  return <Shell settings={data.settings} modules={data.modules} />;
+}
