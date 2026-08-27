@@ -405,7 +405,7 @@ issue_certs() {
         --non-interactive --agree-tos \
         --register-unsafely-without-email \
         --preferred-challenges http \
-        --keep-until-expiry \
+        --keep-until-expiring \
         >"$out" 2>&1
       rc=$?
       set -e
