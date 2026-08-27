@@ -110,13 +110,16 @@ install -m 0644 "$HERE/VERSION" /usr/local/share/keel/VERSION
 
 log "Build panel"
 cd /opt/keel
-if [ -f package-lock.json ]; then
-  npm ci --omit=dev=false
-else
-  npm install
-fi
+# Auth stays off on a self-hosted box (no Grok identity). Build needs
+# devDependencies (vite, nitro) so we never --omit=dev.
+export VITE_AUTH_ENABLED="${VITE_AUTH_ENABLED:-false}"
 export KEEL_VPS=1
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=2048}"
+if [ -f package-lock.json ]; then
+  npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+else
+  npm install --no-audit --no-fund
+fi
 npm run build
 # PGlite wasm/data must sit next to the nitro server bundle.
 if [ -d /opt/keel/.output/server ]; then
