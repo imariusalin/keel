@@ -52,7 +52,7 @@ function SitesPage() {
       await createSite({
         data: { domain, phpVersion, isolated, ssl, memoryLimit: "256M" },
       });
-      toast.success("Site created");
+      toast.success("Site created — DNS A record added");
       setOpen(false);
       setDomain("");
       await router.invalidate();

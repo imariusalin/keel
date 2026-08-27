@@ -210,6 +210,9 @@ UNIT
 
     vhost="$(render "$TEMPLATES/nginx-node.conf" __DOMAIN__ "$domain" __PORT__ "$port")"
     write_file "/etc/nginx/keel-apps.d/app-${domain}.conf" "$vhost"
+    if [[ ! "$domain" =~ \.(example|local|test)$ ]]; then
+      SSL_DOMAINS+=("$domain")
+    fi
   done < <(jq -c '.apps // [] | .[]' "$STATE")
 }
 
@@ -267,6 +270,14 @@ apply_mail() {
     printf '%s %s/\n' "$addr" "$domain/$localpart" >>/var/lib/keel/mail/vmailbox
     grep -qxF "$domain" /var/lib/keel/mail/vdomains 2>/dev/null || echo "$domain" >>/var/lib/keel/mail/vdomains
     mkdir -p "/var/mail/keel/${domain}/${localpart}"
+    mkdir -p /var/lib/keel/dkim
+    if [ ! -f "/var/lib/keel/dkim/${domain}.private" ] && command -v opendkim-genkey >/dev/null 2>&1; then
+      opendkim-genkey -D /var/lib/keel/dkim -s mail -d "$domain" >/dev/null 2>&1 || true
+      if [ -f /var/lib/keel/dkim/mail.private ]; then
+        mv /var/lib/keel/dkim/mail.private "/var/lib/keel/dkim/${domain}.private"
+        mv /var/lib/keel/dkim/mail.txt "/var/lib/keel/dkim/${domain}.txt" 2>/dev/null || true
+      fi
+    fi
   done < <(jq -c '.mailboxes // [] | .[]' "$STATE")
   chown -R vmail:vmail /var/mail/keel
   postmap /var/lib/keel/mail/vmailbox 2>/dev/null || true
@@ -319,6 +330,12 @@ apply_dns() {
           echo "${n} ${ttl} IN ${t} ${v}"
         fi
       done < <(jq -c '.records // [] | .[]' <<<"$zone")
+      if [ -f "/var/lib/keel/dkim/${zname}.txt" ]; then
+        p="$(tr -d '\n" ' <"/var/lib/keel/dkim/${zname}.txt" | sed -n 's/.*p=\([^;]*\).*/\1/p')"
+        if [ -n "$p" ]; then
+          echo "mail._domainkey 300 IN TXT \"v=DKIM1; k=rsa; p=${p}\""
+        fi
+      fi
     } >"$zfile"
     chmod 644 "$zfile"
     echo "zone \"${zname}\" { type master; file \"${zfile}\"; };" >>/etc/bind/keel-zones.conf

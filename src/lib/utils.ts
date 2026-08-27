@@ -28,3 +28,22 @@ export function systemUserFromDomain(domain: string) {
     .slice(0, 24);
   return `s_${slug || "site"}`;
 }
+
+export function nodeUserFromDomain(domain: string) {
+  const slug = domain
+    .toLowerCase()
+    .replace(/^www\./, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "")
+    .slice(0, 24);
+  return `n_${slug || "app"}`;
+}
+
+export function normalizeDomain(raw: string) {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "")
+    .replace(/\.$/, "");
+}

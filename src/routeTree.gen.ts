@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as PanelRouteImport } from './routes/_panel'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as SetupRouteImport } from './routes/setup'
 import { Route as PanelIndexRouteImport } from './routes/_panel.index'
 import { Route as PanelAppsRouteImport } from './routes/_panel.apps'
@@ -22,9 +23,15 @@ import { Route as PanelSettingsRouteImport } from './routes/_panel.settings'
 import { Route as PanelSitesRouteImport } from './routes/_panel.sites'
 import { Route as PanelSitesIndexRouteImport } from './routes/_panel.sites.index'
 import { Route as PanelSitesIdRouteImport } from './routes/_panel.sites.$id'
+import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
 const PanelRoute = PanelRouteImport.update({
   id: '/_panel',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SetupRoute = SetupRouteImport.update({
@@ -87,9 +94,15 @@ const PanelSitesIdRoute = PanelSitesIdRouteImport.update({
   path: '/$id',
   getParentRoute: () => PanelSitesRoute,
 } as any)
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof PanelIndexRoute
+  '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
   '/apps': typeof PanelAppsRoute
   '/dns': typeof PanelDnsRoute
@@ -100,9 +113,11 @@ export interface FileRoutesByFullPath {
   '/settings': typeof PanelSettingsRoute
   '/sites': typeof PanelSitesRouteWithChildren
   '/sites/$id': typeof PanelSitesIdRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
   '/sites/': typeof PanelSitesIndexRoute
 }
 export interface FileRoutesByTo {
+  '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
   '/apps': typeof PanelAppsRoute
   '/dns': typeof PanelDnsRoute
@@ -113,11 +128,13 @@ export interface FileRoutesByTo {
   '/settings': typeof PanelSettingsRoute
   '/': typeof PanelIndexRoute
   '/sites/$id': typeof PanelSitesIdRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
   '/sites': typeof PanelSitesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_panel': typeof PanelRouteWithChildren
+  '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
   '/_panel/apps': typeof PanelAppsRoute
   '/_panel/dns': typeof PanelDnsRoute
@@ -129,12 +146,14 @@ export interface FileRoutesById {
   '/_panel/sites': typeof PanelSitesRouteWithChildren
   '/_panel/': typeof PanelIndexRoute
   '/_panel/sites/$id': typeof PanelSitesIdRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
   '/_panel/sites/': typeof PanelSitesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/login'
     | '/setup'
     | '/apps'
     | '/dns'
@@ -145,9 +164,11 @@ export interface FileRouteTypes {
     | '/settings'
     | '/sites'
     | '/sites/$id'
+    | '/api/auth/$'
     | '/sites/'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/login'
     | '/setup'
     | '/apps'
     | '/dns'
@@ -158,10 +179,12 @@ export interface FileRouteTypes {
     | '/settings'
     | '/'
     | '/sites/$id'
+    | '/api/auth/$'
     | '/sites'
   id:
     | '__root__'
     | '/_panel'
+    | '/login'
     | '/setup'
     | '/_panel/apps'
     | '/_panel/dns'
@@ -173,12 +196,15 @@ export interface FileRouteTypes {
     | '/_panel/sites'
     | '/_panel/'
     | '/_panel/sites/$id'
+    | '/api/auth/$'
     | '/_panel/sites/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   PanelRoute: typeof PanelRouteWithChildren
+  LoginRoute: typeof LoginRoute
   SetupRoute: typeof SetupRoute
+  ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -188,6 +214,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof PanelRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/setup': {
@@ -274,6 +307,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PanelSitesIdRouteImport
       parentRoute: typeof PanelSitesRoute
     }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -319,7 +359,9 @@ const PanelRouteWithChildren = PanelRoute._addFileChildren(PanelRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   PanelRoute: PanelRouteWithChildren,
+  LoginRoute: LoginRoute,
   SetupRoute: SetupRoute,
+  ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

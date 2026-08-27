@@ -21,18 +21,22 @@ import { Switch } from "@/components/ui/switch";
 import {
   createMailbox,
   deleteMailbox,
+  listMailDns,
   listMailboxes,
   toggleMailbox,
 } from "@/lib/panel/server";
 import { formatBytes } from "@/lib/utils";
 
 export const Route = createFileRoute("/_panel/mail")({
-  loader: () => listMailboxes(),
+  loader: async () => {
+    const [boxes, dns] = await Promise.all([listMailboxes(), listMailDns()]);
+    return { boxes, dns };
+  },
   component: MailPage,
 });
 
 function MailPage() {
-  const boxes = Route.useLoaderData();
+  const { boxes, dns } = Route.useLoaderData();
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [address, setAddress] = useState("");
@@ -45,7 +49,7 @@ function MailPage() {
       await createMailbox({
         data: { address, quotaMb: Number(quota) || 2048 },
       });
-      toast.success("Mailbox created");
+      toast.success("Mailbox created — MX, SPF, DKIM, DMARC records written");
       setOpen(false);
       setAddress("");
       await router.invalidate();
@@ -61,7 +65,7 @@ function MailPage() {
       <PageHeader
         kicker="Mail"
         title="Mailboxes"
-        description="Local delivery with SPF, DKIM, and DMARC aligned to each zone. Ports 25 / 587 / 993."
+        description="Creating a mailbox writes MX, SPF, DKIM, and DMARC for that domain. Point the domain’s nameservers here, or copy the records to your DNS host."
         action={
           <Button onClick={() => setOpen(true)}>
             <Plus className="size-4" />
@@ -70,16 +74,43 @@ function MailPage() {
         }
       />
 
-      <div className="mb-4 grid gap-3 sm:grid-cols-3">
-        {["SPF pass", "DKIM signed", "DMARC quarantine"].map((label) => (
-          <Card key={label}>
-            <CardContent className="p-5">
-              <Badge variant="ok">ok</Badge>
-              <p className="mt-2 text-sm font-medium">{label}</p>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {dns.length > 0 ? (
+        <div className="mb-6 grid gap-3">
+          {dns.map((zone) => (
+            <Card key={zone.domain}>
+              <CardContent className="p-5">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium">{zone.domain} DNS</p>
+                  <Badge variant={zone.records.every((r) => r.present) ? "ok" : "warn"}>
+                    {zone.records.filter((r) => r.present).length}/{zone.records.length} records
+                  </Badge>
+                </div>
+                <ul className="space-y-2 font-mono text-xs">
+                  {zone.records.map((rec) => (
+                    <li
+                      key={`${rec.type}-${rec.name}`}
+                      className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-3"
+                    >
+                      <span className="w-16 shrink-0 text-muted-foreground">{rec.type}</span>
+                      <span className="w-28 shrink-0">{rec.name}</span>
+                      <span className="min-w-0 flex-1 truncate">{rec.value}</span>
+                      <Badge variant={rec.present ? "ok" : "warn"}>
+                        {rec.present ? "set" : "missing"}
+                      </Badge>
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : (
+        <Card className="mb-6">
+          <CardContent className="p-5 text-sm text-muted-foreground">
+            Add a mailbox and Keel will detect the domain, then write the mail DNS records automatically.
+          </CardContent>
+        </Card>
+      )}
 
       {boxes.length === 0 ? (
         <Card>
@@ -142,7 +173,7 @@ function MailPage() {
           <DialogHeader>
             <DialogTitle>New mailbox</DialogTitle>
             <DialogDescription>
-              Role addresses only. Delivery is local to this server.
+              Keel writes MX, A, SPF, DKIM, and DMARC for the domain automatically.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
@@ -152,7 +183,7 @@ function MailPage() {
                 id="addr"
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
-                placeholder="hello@studio.example"
+                placeholder="hello@example.com"
               />
             </div>
             <div className="grid gap-2">

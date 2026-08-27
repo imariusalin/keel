@@ -1,8 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql, type Sql } from "@/lib/db";
-import { systemUserFromDomain } from "@/lib/utils";
+import { normalizeDomain, systemUserFromDomain } from "@/lib/utils";
 import { applyAfterChange, isVpsApply, publicIp, readHostMetrics } from "./apply";
+import { bootstrapAdminIfNeeded, hasAdminUser } from "./bootstrap-admin";
+import { describeMailDns, ensureHostDns, ensureMailDns, mailboxDomain } from "./dns-auto";
 import {
   mapActivity,
   mapApp,
@@ -162,111 +165,35 @@ async function seedBaseFirewall(sql: Sql) {
   }
 }
 
-async function seedDemo(sql: Sql, isolation: boolean) {
-  const siteCount = await sql<{ n: number }>`select count(*)::int as n from sites`;
-  if ((siteCount[0]?.n ?? 0) > 0) return;
-
-  const sites = [
-    {
-      domain: "studio.example",
-      php: "8.4",
-      mem: "256M",
-    },
-    {
-      domain: "shop.example",
-      php: "8.3",
-      mem: "512M",
-    },
-    {
-      domain: "docs.example",
-      php: "8.2",
-      mem: "128M",
-    },
-  ];
-  for (const site of sites) {
-    const user = systemUserFromDomain(site.domain);
-    const pool = `php${site.php.replace(".", "")}-${user}`;
+async function ensureSetup(sql: Sql): Promise<void> {
+  const existing = await sql<{ id: number }>`select id from panel_settings where id = 1`;
+  if (existing.length === 0) {
+    const hostname = process.env.KEEL_HOSTNAME?.trim() || "panel.keel.local";
     await sql`
-      insert into sites (domain, php_version, root, ssl, force_https, isolated, jail_user, pool, status, memory_limit)
-      values (
-        ${site.domain}, ${site.php}, ${`/home/${user}/www`},
-        true, true, ${isolation}, ${user}, ${pool}, 'active', ${site.mem}
-      )
+      insert into panel_settings (id, hostname, isolation, setup_complete, ssh_port, auto_updates)
+      values (1, ${hostname}, true, true, 22, true)
     `;
+    await logActivity(sql, "setup", "Keel is ready");
   }
-
-  await sql`
-    insert into node_apps (name, domain, node_version, port, status, entry, instances, memory_mb)
-    values
-      ('studio-api', 'api.studio.example', '22', 3001, 'running', 'dist/index.js', 2, 384),
-      ('shop-realtime', 'rt.shop.example', '20', 3002, 'running', 'server.js', 1, 256)
-  `;
-
-  const rules: Array<[string, string, string, string, string, string]> = [
-    ["in", "allow", "tcp", "22", "any", "SSH"],
-    ["in", "allow", "tcp", "80", "any", "HTTP"],
-    ["in", "allow", "tcp", "443", "any", "HTTPS"],
-    ["in", "allow", "tcp", "25", "any", "SMTP"],
-    ["in", "allow", "tcp", "587", "any", "Submission"],
-    ["in", "allow", "tcp", "993", "any", "IMAPS"],
-    ["in", "allow", "udp", "53", "any", "DNS"],
-    ["in", "deny", "tcp", "3306", "any", "Database closed"],
-  ];
-  for (const [direction, action, protocol, port, source, comment] of rules) {
-    await sql`
-      insert into firewall_rules (direction, action, protocol, port, source, comment, enabled)
-      values (${direction}, ${action}, ${protocol}, ${port}, ${source}, ${comment}, true)
-    `;
-  }
-
-  await sql`
-    insert into mailboxes (address, quota_mb, used_mb, status)
-    values
-      ('hello@studio.example', 2048, 186, 'active'),
-      ('orders@shop.example', 4096, 912, 'active'),
-      ('noreply@studio.example', 512, 24, 'active')
-  `;
-
-  const zones = await sql<Record<string, unknown>>`
-    insert into dns_zones (name, serial, status)
-    values ('studio.example', 2026082601, 'active'), ('shop.example', 2026082601, 'active')
-    returning *
-  `;
-  const studio = zones.find((z) => z.name === "studio.example");
-  const shop = zones.find((z) => z.name === "shop.example");
-  if (studio) {
-    const id = Number(studio.id);
-    await sql`
-      insert into dns_records (zone_id, type, name, value, ttl, priority)
-      values
-        (${id}, 'A', '@', '203.0.113.10', 300, null),
-        (${id}, 'A', 'www', '203.0.113.10', 300, null),
-        (${id}, 'A', 'api', '203.0.113.10', 300, null),
-        (${id}, 'MX', '@', 'mail.studio.example', 300, 10),
-        (${id}, 'TXT', '@', 'v=spf1 mx -all', 300, null)
-    `;
-  }
-  if (shop) {
-    const id = Number(shop.id);
-    await sql`
-      insert into dns_records (zone_id, type, name, value, ttl, priority)
-      values
-        (${id}, 'A', '@', '203.0.113.20', 300, null),
-        (${id}, 'A', 'www', '203.0.113.20', 300, null),
-        (${id}, 'CNAME', 'rt', 'shop.example', 300, null),
-        (${id}, 'MX', '@', 'mail.shop.example', 300, 10)
-    `;
-  }
-
-  await logActivity(sql, "setup", "Keel finished first-run setup");
-  await logActivity(sql, "site", "Isolated site studio.example on PHP 8.4");
-  await logActivity(sql, "tls", "Issued certificates for three sites");
-  await logActivity(sql, "firewall", "Default-deny policy with seven allow rules");
+  await seedModules(sql, ["php", "node", "firewall", "ssl", "mail", "dns"]);
+  await seedBaseFirewall(sql);
 }
+
+export const adminStatus = createServerFn({ method: "GET" }).handler(async () => {
+  return { hasAdmin: await hasAdminUser() };
+});
+
+export const sessionUser = createServerFn({ method: "GET" }).handler(async () => {
+  const { getSessionUser } = await import("@/lib/auth/verify.server");
+  const user = await getSessionUser();
+  return user ? { id: user.id, email: user.email } : null;
+});
 
 export const getPanelState = createServerFn({ method: "GET" }).handler(
   async (): Promise<PanelState> => {
     const sql = await getSql();
+    await ensureSetup(sql);
+    await bootstrapAdminIfNeeded();
     const settings = await readSettings(sql);
     const modules = (await sql<Record<string, unknown>>`
       select * from modules order by sort_order
@@ -299,12 +226,8 @@ export const completeSetup = createServerFn({ method: "POST" })
     `;
     const enabled = new Set(["ssl", ...data.modules]);
     await seedModules(sql, [...enabled]);
-    if (isVpsApply()) {
-      await seedBaseFirewall(sql);
-      await logActivity(sql, "setup", "Keel finished first-run setup");
-    } else {
-      await seedDemo(sql, data.isolation);
-    }
+    await seedBaseFirewall(sql);
+    await logActivity(sql, "setup", "Keel is ready");
     const settings = await readSettings(sql);
     const modules = (await sql<Record<string, unknown>>`
       select * from modules order by sort_order
@@ -316,6 +239,7 @@ export const completeSetup = createServerFn({ method: "POST" })
 export const getDashboard = createServerFn({ method: "GET" }).handler(
   async (): Promise<DashboardData> => {
     const sql = await getSql();
+    await ensureSetup(sql);
     const settings = await readSettings(sql);
     const modules = (await sql<Record<string, unknown>>`
       select * from modules order by sort_order
@@ -378,10 +302,11 @@ const siteCreateSchema = z.object({
 });
 
 export const createSite = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(siteCreateSchema)
   .handler(async ({ data }) => {
     const sql = await getSql();
-    const domain = data.domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    const domain = normalizeDomain(data.domain);
     const user = systemUserFromDomain(domain);
     const pool = `php${data.phpVersion.replace(".", "")}-${user}`;
     const root = `/home/${user}/www`;
@@ -391,11 +316,13 @@ export const createSite = createServerFn({ method: "POST" })
       returning *
     `;
     await logActivity(sql, "site", `Created isolated site ${domain} on PHP ${data.phpVersion}`);
+    await ensureHostDns(sql, domain);
     await applyAfterChange(sql);
     return mapSite(rows[0]);
   });
 
 export const updateSite = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(
     z.object({
       id: z.number(),
@@ -446,6 +373,7 @@ export const updateSite = createServerFn({ method: "POST" })
   });
 
 export const deleteSite = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(z.object({ id: z.number() }))
   .handler(async ({ data }) => {
     const sql = await getSql();
@@ -467,30 +395,46 @@ export const listApps = createServerFn({ method: "GET" }).handler(async () => {
 });
 
 export const createApp = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(
     z.object({
-      name: z.string().min(1).max(80),
+      name: z.string().min(1).max(80).optional(),
       domain: z.string().min(3).max(120),
       nodeVersion: z.string(),
-      port: z.number().min(1024).max(65535),
+      port: z.number().min(1024).max(65535).optional(),
       entry: z.string().min(1).max(80),
       instances: z.number().min(1).max(8),
     }),
   )
   .handler(async ({ data }) => {
     const sql = await getSql();
-    const domain = data.domain.trim().toLowerCase();
+    const domain = normalizeDomain(data.domain);
+    const name = (data.name?.trim() || domain).slice(0, 80);
+    const used = await sql<{ port: number }>`select port from node_apps`;
+    const taken = new Set(used.map((r) => r.port));
+    let port = data.port ?? 0;
+    if (!port) {
+      for (let p = 3000; p < 4000; p++) {
+        if (!taken.has(p)) {
+          port = p;
+          break;
+        }
+      }
+    }
+    if (!port) throw new Error("No free port in 3000–3999");
     const rows = await sql<Record<string, unknown>>`
       insert into node_apps (name, domain, node_version, port, status, entry, instances, memory_mb)
-      values (${data.name.trim()}, ${domain}, ${data.nodeVersion}, ${data.port}, 'running', ${data.entry}, ${data.instances}, 256)
+      values (${name}, ${domain}, ${data.nodeVersion}, ${port}, 'running', ${data.entry}, ${data.instances}, 256)
       returning *
     `;
-    await logActivity(sql, "node", `Started ${data.name.trim()} on Node ${data.nodeVersion}`);
+    await logActivity(sql, "node", `Started ${name} on ${domain} (Node ${data.nodeVersion})`);
+    await ensureHostDns(sql, domain);
     await applyAfterChange(sql);
     return mapApp(rows[0]);
   });
 
 export const updateApp = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(
     z.object({
       id: z.number(),
@@ -520,6 +464,7 @@ export const updateApp = createServerFn({ method: "POST" })
   });
 
 export const deleteApp = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(z.object({ id: z.number() }))
   .handler(async ({ data }) => {
     const sql = await getSql();
@@ -541,6 +486,7 @@ export const listFirewall = createServerFn({ method: "GET" }).handler(async () =
 });
 
 export const createFirewallRule = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(
     z.object({
       action: z.enum(["allow", "deny"]),
@@ -567,6 +513,7 @@ export const createFirewallRule = createServerFn({ method: "POST" })
   });
 
 export const toggleFirewallRule = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(z.object({ id: z.number(), enabled: z.boolean() }))
   .handler(async ({ data }) => {
     const sql = await getSql();
@@ -578,6 +525,7 @@ export const toggleFirewallRule = createServerFn({ method: "POST" })
   });
 
 export const deleteFirewallRule = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(z.object({ id: z.number() }))
   .handler(async ({ data }) => {
     const sql = await getSql();
@@ -594,6 +542,7 @@ export const listMailboxes = createServerFn({ method: "GET" }).handler(async () 
 });
 
 export const createMailbox = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(
     z.object({
       address: z.string().min(3).max(120),
@@ -609,11 +558,13 @@ export const createMailbox = createServerFn({ method: "POST" })
       returning *
     `;
     await logActivity(sql, "mail", `Created mailbox ${address}`);
+    await ensureMailDns(sql, address);
     await applyAfterChange(sql);
     return mapMailbox(rows[0]);
   });
 
 export const toggleMailbox = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(z.object({ id: z.number(), status: z.enum(["active", "disabled"]) }))
   .handler(async ({ data }) => {
     const sql = await getSql();
@@ -625,6 +576,7 @@ export const toggleMailbox = createServerFn({ method: "POST" })
   });
 
 export const deleteMailbox = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(z.object({ id: z.number() }))
   .handler(async ({ data }) => {
     const sql = await getSql();
@@ -645,6 +597,7 @@ export const listDns = createServerFn({ method: "GET" }).handler(async () => {
 });
 
 export const createDnsZone = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(z.object({ name: z.string().min(3).max(120) }))
   .handler(async ({ data }) => {
     const sql = await getSql();
@@ -671,6 +624,7 @@ export const createDnsZone = createServerFn({ method: "POST" })
   });
 
 export const createDnsRecord = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(
     z.object({
       zoneId: z.number(),
@@ -693,6 +647,7 @@ export const createDnsRecord = createServerFn({ method: "POST" })
   });
 
 export const deleteDnsRecord = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(z.object({ id: z.number() }))
   .handler(async ({ data }) => {
     const sql = await getSql();
@@ -709,6 +664,7 @@ export const listModules = createServerFn({ method: "GET" }).handler(async () =>
 });
 
 export const toggleModule = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(z.object({ id: z.number(), enabled: z.boolean() }))
   .handler(async ({ data }) => {
     const sql = await getSql();
@@ -727,6 +683,7 @@ export const toggleModule = createServerFn({ method: "POST" })
   });
 
 export const updateSettings = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
   .validator(
     z.object({
       hostname: z.string().min(1).max(120).optional(),
@@ -752,4 +709,19 @@ export const updateSettings = createServerFn({ method: "POST" })
     `;
     await applyAfterChange(sql);
     return readSettings(sql);
+  });
+
+export const listMailDns = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async () => {
+    const sql = await getSql();
+    const boxes = await sql<{ address: string }>`select address from mailboxes`;
+    const domains = [
+      ...new Set(boxes.map((b) => mailboxDomain(b.address)).filter((d) => d.includes("."))),
+    ];
+    const result = [];
+    for (const domain of domains) {
+      result.push(await describeMailDns(sql, domain));
+    }
+    return result;
   });

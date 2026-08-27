@@ -18,6 +18,7 @@ Environment=NITRO_PORT=9090
 Environment=NITRO_HOST=127.0.0.1
 Environment=KEEL_HOSTNAME=__HOSTNAME__
 Environment=KEEL_PUBLIC_IP=__PUBLIC_IP__
+EnvironmentFile=-/var/lib/keel/admin.env
 ExecStart=/usr/bin/node /opt/keel/.output/server/index.mjs
 Restart=on-failure
 RestartSec=3

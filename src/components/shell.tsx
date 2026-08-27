@@ -9,12 +9,12 @@ import {
   Server,
   Settings,
   Shield,
-  Terminal,
 } from "lucide-react";
 import { useState } from "react";
 import { KeelMark } from "@/components/keel-mark";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { UserButton } from "@/lib/auth/gates";
 import { cn } from "@/lib/utils";
 import type { ModuleRow, PanelSettings } from "@/lib/panel/types";
 
@@ -46,7 +46,6 @@ const NAV: { title: string; items: NavItem[] }[] = [
     title: "Extend",
     items: [
       { to: "/modules", label: "Modules", icon: Puzzle },
-      { to: "/install", label: "Install", icon: Terminal },
       { to: "/settings", label: "Settings", icon: Settings },
     ],
   },
@@ -146,6 +145,9 @@ function SidebarBody({
       </div>
       <div className="pt-4">
         <ServerChip hostname={settings.hostname} />
+        <div className="mt-3 px-1">
+          <UserButton />
+        </div>
       </div>
     </div>
   );

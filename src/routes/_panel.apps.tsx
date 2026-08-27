@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/select";
 import { createApp, deleteApp, listApps, updateApp } from "@/lib/panel/server";
 import { NODE_VERSIONS } from "@/lib/panel/types";
+import { nodeUserFromDomain } from "@/lib/utils";
 
 export const Route = createFileRoute("/_panel/apps")({
   loader: () => listApps(),
@@ -42,27 +43,27 @@ function AppsPage() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [name, setName] = useState("");
   const [domain, setDomain] = useState("");
+  const [name, setName] = useState("");
   const [nodeVersion, setNodeVersion] = useState("22");
-  const [port, setPort] = useState("3000");
   const [entry, setEntry] = useState("server.js");
   const [instances, setInstances] = useState("1");
+
+  const userPreview = domain ? nodeUserFromDomain(domain) : "n_app";
 
   async function onCreate() {
     setBusy(true);
     try {
       await createApp({
         data: {
-          name,
+          name: name.trim() || undefined,
           domain,
           nodeVersion,
-          port: Number(port) || 3000,
           entry,
           instances: Number(instances) || 1,
         },
       });
-      toast.success("App started");
+      toast.success("App created — DNS A record added");
       setOpen(false);
       setName("");
       setDomain("");
@@ -79,7 +80,7 @@ function AppsPage() {
       <PageHeader
         kicker="Node.js"
         title="Apps"
-        description="Reverse-proxied Node processes. Pin a version, scale instances, restart without touching PHP."
+        description="Same as a site: a domain or subdomain, its own user, nginx, TLS, and a DNS A record. Port is assigned for you."
         action={
           <Button onClick={() => setOpen(true)}>
             <Plus className="size-4" />
@@ -92,27 +93,26 @@ function AppsPage() {
         <Card>
           <CardContent className="flex flex-col items-center py-16 text-center">
             <Box className="size-6 text-muted-foreground" />
-            <p className="mt-3 text-sm text-muted-foreground">No Node apps yet.</p>
+            <p className="mt-3 text-sm text-muted-foreground">
+              No Node apps yet. Add a domain or subdomain.
+            </p>
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-3">
-          {apps.map((app) => (
-            <Card key={app.id}>
-              <CardContent className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center">
+        <div className="overflow-hidden rounded-xl bg-card shadow-[var(--shadow-border)]">
+          <ul className="divide-y divide-border">
+            {apps.map((app) => (
+              <li
+                key={app.id}
+                className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:gap-4"
+              >
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="truncate font-medium">{app.name}</p>
-                    <Badge variant={app.status === "running" ? "ok" : "warn"}>
-                      {app.status}
-                    </Badge>
-                  </div>
-                  <p className="mt-1 font-mono text-xs text-muted-foreground">
-                    {app.domain} · :{app.port} · {app.entry} · {app.instances}× Node{" "}
-                    {app.nodeVersion}
+                  <p className="truncate font-medium">{app.domain}</p>
+                  <p className="mt-0.5 font-mono text-xs text-muted-foreground">
+                    {app.name} · :{app.port} · {app.entry} · {app.instances}× Node {app.nodeVersion}
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Select
                     value={app.nodeVersion}
                     onValueChange={(v) =>
@@ -132,6 +132,7 @@ function AppsPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <Badge variant={app.status === "running" ? "ok" : "warn"}>{app.status}</Badge>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="ghost" size="icon-sm" aria-label="App actions">
@@ -165,9 +166,9 @@ function AppsPage() {
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
-              </CardContent>
-            </Card>
-          ))}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
@@ -176,21 +177,29 @@ function AppsPage() {
           <DialogHeader>
             <DialogTitle>New Node app</DialogTitle>
             <DialogDescription>
-              Proxied from nginx. Runs as its own process user.
+              Domain or subdomain. Creates a system user, reverse proxy, TLS, and DNS — same path as a PHP site.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="app-name">Name</Label>
-              <Input id="app-name" value={name} onChange={(e) => setName(e.target.value)} />
-            </div>
             <div className="grid gap-2">
               <Label htmlFor="app-domain">Domain</Label>
               <Input
                 id="app-domain"
                 value={domain}
                 onChange={(e) => setDomain(e.target.value)}
-                placeholder="api.example"
+                placeholder="api.example.com"
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <p className="font-mono text-[11px] text-muted-foreground">User {userPreview}</p>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="app-name">Name (optional)</Label>
+              <Input
+                id="app-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="defaults to the domain"
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -210,17 +219,6 @@ function AppsPage() {
                 </Select>
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="port">Port</Label>
-                <Input
-                  id="port"
-                  value={port}
-                  onChange={(e) => setPort(e.target.value)}
-                  inputMode="numeric"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="grid gap-2">
                 <Label htmlFor="entry">Entry</Label>
                 <Input
                   id="entry"
@@ -228,23 +226,23 @@ function AppsPage() {
                   onChange={(e) => setEntry(e.target.value)}
                 />
               </div>
-              <div className="grid gap-2">
-                <Label htmlFor="instances">Instances</Label>
-                <Input
-                  id="instances"
-                  value={instances}
-                  onChange={(e) => setInstances(e.target.value)}
-                  inputMode="numeric"
-                />
-              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="instances">Instances</Label>
+              <Input
+                id="instances"
+                value={instances}
+                onChange={(e) => setInstances(e.target.value)}
+                inputMode="numeric"
+              />
             </div>
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={() => void onCreate()} disabled={busy || !name || !domain}>
-              {busy ? "Starting…" : "Start app"}
+            <Button onClick={() => void onCreate()} disabled={busy || !domain.trim()}>
+              {busy ? "Creating…" : "Create app"}
             </Button>
           </DialogFooter>
         </DialogContent>

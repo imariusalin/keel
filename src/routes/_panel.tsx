@@ -1,19 +1,16 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
+import { RedirectToSignIn } from "@/lib/auth/gates";
+import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { Shell } from "@/components/shell";
-import { getPanelState } from "@/lib/panel/server";
+import { getPanelState, sessionUser } from "@/lib/panel/server";
 
 export const Route = createFileRoute("/_panel")({
   loader: async () => {
-    const state = await getPanelState();
-    if (!state.settings.setupComplete) {
-      throw redirect({ to: "/setup" });
+    const user = await sessionUser();
+    if (!user) {
+      throw redirect({ to: "/login" });
     }
-    return state;
+    return getPanelState();
   },
   component: PanelLayout,
 });
-
-function PanelLayout() {
-  const data = Route.useLoaderData();
-  return <Shell settings={data.settings} modules={data.modules} />;
-}

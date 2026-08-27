@@ -8,7 +8,15 @@ REPO="$(cd "$HERE/.." && pwd)"
 VERSION="$(cat "$HERE/VERSION" 2>/dev/null || echo 0.1.0)"
 export DEBIAN_FRONTEND=noninteractive
 
-log()  { printf '\n==> %s\n' "$*"; }
+KEEL_LOG="${KEEL_LOG:-/var/log/keel-install.log}"
+KEEL_PROGRESS="${KEEL_PROGRESS:-/run/keel-install.progress}"
+STEP=0
+
+log()  {
+  STEP=$((STEP + 1))
+  printf '%s\t%s\n' "$STEP" "$*" >"$KEEL_PROGRESS" 2>/dev/null || true
+  printf '\n==> %s\n' "$*"
+}
 die()  { printf 'keel: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -23,6 +31,83 @@ case "${ID:-}-${VERSION_ID:-}" in
     die "Supported: Ubuntu 22.04/24.04 and Debian 12/13. Found ${ID:-unknown} ${VERSION_ID:-}."
     ;;
 esac
+
+# Quiet TUI: real work runs in the background; this process only draws a bar.
+if [ "${KEEL_INNER:-0}" != "1" ] && [ "${KEEL_VERBOSE:-0}" != "1" ]; then
+  mkdir -p /var/log /run
+  : >"$KEEL_LOG"
+  printf '0\tStarting\n' >"$KEEL_PROGRESS"
+  export KEEL_INNER=1
+  bash "$0" "$@" >>"$KEEL_LOG" 2>&1 &
+  worker=$!
+  TOTAL=16
+  tput civis 2>/dev/null || true
+  trap 'tput cnorm 2>/dev/null || true' EXIT
+  while kill -0 "$worker" 2>/dev/null; do
+    n=0; msg="Working"
+    if [ -f "$KEEL_PROGRESS" ]; then
+      n="$(cut -f1 "$KEEL_PROGRESS" | tail -1)"
+      msg="$(cut -f2- "$KEEL_PROGRESS" | tail -1)"
+    fi
+    n="${n:-0}"
+    [ "$n" -gt "$TOTAL" ] 2>/dev/null && TOTAL="$n"
+    pct=$((n * 100 / TOTAL))
+    [ "$pct" -gt 100 ] && pct=100
+    filled=$((pct / 5))
+    bar=""
+    i=0
+    while [ "$i" -lt 20 ]; do
+      if [ "$i" -lt "$filled" ]; then bar="${bar}█"; else bar="${bar}░"; fi
+      i=$((i + 1))
+    done
+    printf '\033[2J\033[H'
+    cat <<'LOGO'
+
+    _  __          _
+   | |/ /___  ___ | |
+   | ' // _ \/ _ \| |
+   | . \  __/  __/ | |
+   |_|\_\___|\___|_|_|
+          hosting panel
+
+LOGO
+    printf '   %s  %s%%\n' "$bar" "$pct"
+    printf '   %s\n' "$msg"
+    sleep 0.4
+  done
+  set +e
+  wait "$worker"
+  code=$?
+  set -e
+  tput cnorm 2>/dev/null || true
+  printf '\033[2J\033[H'
+  cat <<'LOGO'
+
+    _  __          _
+   | |/ /___  ___ | |
+   | ' // _ \/ _ \| |
+   | . \  __/  __/ | |
+   |_|\_\___|\___|_|_|
+
+LOGO
+  if [ "$code" -ne 0 ]; then
+    printf '   Install failed.\n   Log: %s\n\n' "$KEEL_LOG"
+    tail -n 12 "$KEEL_LOG" | sed 's/^/   /'
+    exit "$code"
+  fi
+  if [ -f /var/lib/keel/credentials ]; then
+    # shellcheck disable=SC1091
+    . /var/lib/keel/credentials
+    printf '   Keel is ready.\n\n'
+    printf '   URL      %s\n' "${url:-http://server/}"
+    printf '   Email    %s\n' "${email:-admin}"
+    printf '   Password %s\n\n' "${password:-}"
+    printf '   Saved at /var/lib/keel/credentials  (root only)\n\n'
+  else
+    printf '   Installed. Open http://%s/\n\n' "$(hostname -I | awk '{print $1}')"
+  fi
+  exit 0
+fi
 
 HOSTNAME_FQDN="${KEEL_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}"
 MODULES_CSV="${KEEL_MODULES:-php,node,firewall,ssl,mail,dns}"
@@ -94,6 +179,26 @@ install -d -m 0750 -o keel -g keel /var/lib/keel /var/lib/keel/pglite /var/lib/k
 install -d -m 0755 /opt/keel /etc/nginx/keel.d /etc/nginx/keel-apps.d
 install -d -m 0750 -o vmail -g vmail /var/mail/keel
 
+ADMIN_HOST="$HOSTNAME_FQDN"
+case "$ADMIN_HOST" in *.*) ;; *) ADMIN_HOST="${ADMIN_HOST}.local" ;; esac
+ADMIN_EMAIL="admin@${ADMIN_HOST}"
+ADMIN_PASS="$(openssl rand -hex 8)"
+umask 077
+cat > /var/lib/keel/bootstrap-admin.json <<JSON
+{"email":"${ADMIN_EMAIL}","password":"${ADMIN_PASS}","name":"Admin"}
+JSON
+cat > /var/lib/keel/admin.env <<ENV
+KEEL_ADMIN_EMAIL=${ADMIN_EMAIL}
+KEEL_ADMIN_PASSWORD=${ADMIN_PASS}
+ENV
+cat > /var/lib/keel/credentials <<ENV
+url=http://__IP__/
+email=${ADMIN_EMAIL}
+password=${ADMIN_PASS}
+ENV
+chown keel:keel /var/lib/keel/bootstrap-admin.json /var/lib/keel/admin.env
+chmod 600 /var/lib/keel/bootstrap-admin.json /var/lib/keel/admin.env /var/lib/keel/credentials
+
 log "Copy panel to /opt/keel"
 rsync -a --delete \
   --exclude node_modules --exclude .git --exclude .vercel --exclude screenshots \
@@ -110,9 +215,8 @@ install -m 0644 "$HERE/VERSION" /usr/local/share/keel/VERSION
 
 log "Build panel"
 cd /opt/keel
-# Auth stays off on a self-hosted box (no Grok identity). Build needs
-# devDependencies (vite, nitro) so we never --omit=dev.
-export VITE_AUTH_ENABLED="${VITE_AUTH_ENABLED:-false}"
+# Build needs devDependencies (vite, nitro). Auth is on (email/password admin).
+unset VITE_AUTH_ENABLED
 export KEEL_VPS=1
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=2048}"
 if [ -f /opt/keel/.output/server/index.mjs ] && [ "${KEEL_REBUILD:-0}" != "1" ]; then
@@ -205,8 +309,10 @@ JSON
 fi
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+if [ -f /var/lib/keel/credentials ]; then
+  sed -i "s|url=http://__IP__/|url=http://${IP:-127.0.0.1}/|" /var/lib/keel/credentials
+fi
 # Last step: always take port 80 from the distro welcome page and reload nginx.
-# apt starts nginx during package install; enable --now does not pick up our vhost.
 log "Activate panel on port 80"
 /usr/local/sbin/keel fix
 sleep 2
@@ -215,11 +321,6 @@ if ! systemctl is-active --quiet keel-panel; then
   journalctl -u keel-panel -n 40 --no-pager || true
   die "panel service is not running"
 fi
+# First request creates the admin from bootstrap-admin.json
+curl -sf -o /dev/null --max-time 8 "http://127.0.0.1:${PANEL_PORT}/login" || true
 log "Keel is installed."
-echo
-echo "    Panel  http://${IP:-<server-ip>}/"
-echo "    Data   /var/lib/keel"
-echo "    Apply  sudo keel apply"
-echo
-echo "Open the panel, finish hostname + modules (under five minutes)."
-echo "After that, every site/app/firewall change is written to this box."
