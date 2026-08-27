@@ -52,6 +52,22 @@ render() {
   printf '%s' "$out"
 }
 
+ACME_ROOT="/var/lib/keel/acme"
+CERTS_JSON="/var/lib/keel/certs.json"
+
+wants_ssl() {
+  case "${1:-}" in true|1|t|yes) ;; *) return 1 ;; esac
+  [[ ! "${2:-}" =~ \.(example|local|test)$ ]]
+}
+
+cert_live() {
+  [ -s "/etc/letsencrypt/live/${1}/fullchain.pem" ] && [ -s "/etc/letsencrypt/live/${1}/privkey.pem" ]
+}
+
+truthy() {
+  case "${1:-}" in true|1|t|yes) return 0 ;; *) return 1 ;; esac
+}
+
 ensure_user() {
   user="$1"
   home="$2"
@@ -68,6 +84,7 @@ ensure_user() {
 SSL_DOMAINS=()
 
 apply_sites() {
+  SSL_DOMAINS=()
   mkdir -p /etc/nginx/keel.d
   if [ "$DRY" -eq 0 ]; then
     find /etc/nginx/keel.d -name 'site-*.conf' -delete 2>/dev/null || true
@@ -85,6 +102,7 @@ apply_sites() {
     status="$(jq -r '.status' <<<"$site")"
     isolated="$(jq -r '.isolated' <<<"$site")"
     ssl="$(jq -r '.ssl' <<<"$site")"
+    force="$(jq -r '.forceHttps // false' <<<"$site")"
 
     [ "$status" = "active" ] || continue
     ok_domain "$domain" || { log "skip site, bad domain"; continue; }
@@ -114,17 +132,28 @@ apply_sites() {
     socket="/run/php/${pool}.sock"
     conf="$(render "$TEMPLATES/php-fpm-pool.conf" \
       __POOL__ "$pool" __USER__ "$user" __MEMORY__ "$mem")"
-    if [ "$isolated" != "true" ]; then
+    if [ "$isolated" != "true" ] && [ "$isolated" != "t" ] && [ "$isolated" != "1" ]; then
       conf="$(printf '%s\n' "$conf" | grep -v open_basedir | grep -v disable_functions)"
     fi
     mkdir -p "/etc/php/${php}/fpm/pool.d"
     write_file "/etc/php/${php}/fpm/pool.d/keel-${pool}.conf" "$conf"
 
-    vhost="$(render "$TEMPLATES/nginx-site.conf" \
-      __DOMAIN__ "$domain" __ROOT__ "$root" __SOCKET__ "$socket")"
+    if wants_ssl "$ssl" "$domain" && cert_live "$domain" && truthy "$force"; then
+      vhost="$(render "$TEMPLATES/nginx-site-force.conf" __DOMAIN__ "$domain")"
+    else
+      vhost="$(render "$TEMPLATES/nginx-site.conf" \
+        __DOMAIN__ "$domain" __ROOT__ "$root" __SOCKET__ "$socket")"
+    fi
     write_file "/etc/nginx/keel.d/site-${domain}.conf" "$vhost"
+    if wants_ssl "$ssl" "$domain" && cert_live "$domain"; then
+      sslv="$(render "$TEMPLATES/nginx-site-ssl.conf" \
+        __DOMAIN__ "$domain" __ROOT__ "$root" __SOCKET__ "$socket")"
+      write_file "/etc/nginx/keel.d/site-${domain}-ssl.conf" "$sslv"
+    else
+      rm -f "/etc/nginx/keel.d/site-${domain}-ssl.conf"
+    fi
 
-    if [ "$ssl" = "true" ] && [[ ! "$domain" =~ \.(example|local|test)$ ]]; then
+    if wants_ssl "$ssl" "$domain"; then
       SSL_DOMAINS+=("$domain")
     fi
   done < <(jq -c '.sites // [] | .[]' "$STATE")
@@ -211,6 +240,12 @@ UNIT
     vhost="$(render "$TEMPLATES/nginx-node.conf" __DOMAIN__ "$domain" __PORT__ "$port")"
     write_file "/etc/nginx/keel-apps.d/app-${domain}.conf" "$vhost"
     if [[ ! "$domain" =~ \.(example|local|test)$ ]]; then
+      if cert_live "$domain"; then
+        sslv="$(render "$TEMPLATES/nginx-node-ssl.conf" __DOMAIN__ "$domain" __PORT__ "$port")"
+        write_file "/etc/nginx/keel-apps.d/app-${domain}-ssl.conf" "$sslv"
+      else
+        rm -f "/etc/nginx/keel-apps.d/app-${domain}-ssl.conf"
+      fi
       SSL_DOMAINS+=("$domain")
     fi
   done < <(jq -c '.apps // [] | .[]' "$STATE")
@@ -347,13 +382,57 @@ apply_dns() {
 
 issue_certs() {
   [ "$DRY" -eq 0 ] || return 0
-  command -v certbot >/dev/null 2>&1 || return 0
+  command -v certbot >/dev/null 2>&1 || { log "certbot missing"; return 0; }
+  mkdir -p "$ACME_ROOT/.well-known/acme-challenge"
+  chmod 755 /var/lib/keel "$ACME_ROOT" "$ACME_ROOT/.well-known" "$ACME_ROOT/.well-known/acme-challenge" || true
+  echo '{' >"$CERTS_JSON.tmp"
+  first=1
+  NEW_CERTS=0
   for domain in "${SSL_DOMAINS[@]+"${SSL_DOMAINS[@]}"}"; do
     [ -n "$domain" ] || continue
-    certbot --nginx -d "$domain" --non-interactive --agree-tos \
-      --register-unsafely-without-email --keep-until-expiry >/dev/null 2>&1 || \
-      log "certbot skipped for $domain (DNS not pointing here yet)"
+    status="pending"
+    message="Waiting for Let's Encrypt"
+    expires=""
+    if cert_live "$domain"; then
+      status="live"
+      message="Certificate is active"
+      expires="$(openssl x509 -enddate -noout -in "/etc/letsencrypt/live/${domain}/fullchain.pem" 2>/dev/null | sed 's/notAfter=//' || true)"
+    else
+      out="$(mktemp)"
+      set +e
+      certbot certonly --webroot -w "$ACME_ROOT" \
+        -d "$domain" \
+        --non-interactive --agree-tos \
+        --register-unsafely-without-email \
+        --preferred-challenges http \
+        --keep-until-expiry \
+        >"$out" 2>&1
+      rc=$?
+      set -e
+      if [ "$rc" -eq 0 ] && cert_live "$domain"; then
+        status="live"
+        message="Certificate issued"
+        expires="$(openssl x509 -enddate -noout -in "/etc/letsencrypt/live/${domain}/fullchain.pem" 2>/dev/null | sed 's/notAfter=//' || true)"
+        NEW_CERTS=$((NEW_CERTS + 1))
+        log "certificate issued for $domain"
+      else
+        status="error"
+        message="$(tail -n 8 "$out" | tr '\n' ' ' | sed 's/"/\\"/g' | cut -c1-400)"
+        [ -n "$message" ] || message="Let's Encrypt failed (is DNS pointing here? port 80 open?)"
+        log "certbot failed for $domain: $message"
+        mkdir -p /var/log/keel
+        cp "$out" "/var/log/keel/certbot-${domain}.log" || true
+      fi
+      rm -f "$out"
+    fi
+    [ "$first" -eq 1 ] || echo ',' >>"$CERTS_JSON.tmp"
+    first=0
+    printf '"%s":{"status":"%s","message":"%s","expires":"%s"}\n' \
+      "$domain" "$status" "$message" "$expires" >>"$CERTS_JSON.tmp"
   done
+  echo '}' >>"$CERTS_JSON.tmp"
+  mv "$CERTS_JSON.tmp" "$CERTS_JSON"
+  chmod 644 "$CERTS_JSON"
 }
 
 log "applying $(jq -r '.settings.hostname // "unknown"' "$STATE")"
@@ -364,8 +443,17 @@ apply_mail
 apply_dns
 
 if [ "$DRY" -eq 0 ]; then
+  mkdir -p "$ACME_ROOT/.well-known/acme-challenge"
   nginx -t
   systemctl reload nginx
+  NEW_CERTS=0
   issue_certs
+  if [ "${NEW_CERTS:-0}" -gt 0 ]; then
+    log "attaching TLS vhosts"
+    apply_sites
+    apply_apps
+    nginx -t
+    systemctl reload nginx
+  fi
 fi
 log "done"

@@ -32,6 +32,12 @@ export type Site = {
   createdAt: string;
 };
 
+export type CertInfo = {
+  status: "live" | "pending" | "error" | "off";
+  message: string;
+  expires: string | null;
+};
+
 export type NodeApp = {
   id: number;
   name: string;

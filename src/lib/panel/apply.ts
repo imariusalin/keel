@@ -63,6 +63,7 @@ export async function dumpAndApply(sql: Sql): Promise<void> {
       status: site.status,
       isolated: site.isolated,
       ssl: site.ssl,
+      forceHttps: site.forceHttps,
     })),
     apps: apps.map((app) => ({
       name: app.name,

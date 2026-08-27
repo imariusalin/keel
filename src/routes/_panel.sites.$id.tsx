@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { deleteSite, getSite, updateSite } from "@/lib/panel/server";
+import { deleteSite, getSite, retrySiteTls, updateSite } from "@/lib/panel/server";
 import { PHP_VERSIONS } from "@/lib/panel/types";
 
 export const Route = createFileRoute("/_panel/sites/$id")({
@@ -128,6 +128,61 @@ function SiteDetail() {
                 onCheckedChange={(v) => void patch({ id: site.id, ssl: v })}
               />
             </div>
+            {site.ssl ? (
+              <div className="rounded-lg border border-border px-3 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium">
+                    {site.cert?.status === "live"
+                      ? "Certificate live"
+                      : site.cert?.status === "error"
+                        ? "Certificate failed"
+                        : "Issuing certificate"}
+                  </p>
+                  <Badge
+                    variant={
+                      site.cert?.status === "live"
+                        ? "ok"
+                        : site.cert?.status === "error"
+                          ? "warn"
+                          : "outline"
+                    }
+                  >
+                    {site.cert?.status ?? "pending"}
+                  </Badge>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {site.cert?.status === "live"
+                    ? `Let’s Encrypt · ${site.cert.expires || "active"}`
+                    : site.cert?.message ||
+                      "DNS must point here, then Keel requests a Let’s Encrypt cert."}
+                </p>
+                {site.cert?.status !== "live" ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={() =>
+                      void retrySiteTls({ data: { id: site.id } })
+                        .then(() => router.invalidate())
+                        .catch((err: unknown) =>
+                          toast.error(err instanceof Error ? err.message : "Could not issue cert"),
+                        )
+                    }
+                  >
+                    Retry certificate
+                  </Button>
+                ) : (
+                  <a
+                    href={`https://${site.domain}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-3 inline-flex text-sm text-primary hover:underline"
+                  >
+                    Open https://{site.domain}
+                  </a>
+                )}
+              </div>
+            ) : null}
             <div className="flex items-center justify-between rounded-lg bg-secondary px-3 py-3">
               <p className="text-sm font-medium">Force HTTPS</p>
               <Switch

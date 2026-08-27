@@ -18,6 +18,7 @@ import {
   mapZone,
 } from "./map";
 import type {
+  CertInfo,
   DashboardData,
   LiveMetrics,
   PanelSettings,
@@ -284,6 +285,33 @@ export const listSites = createServerFn({ method: "GET" }).handler(async () => {
   );
 });
 
+async function certFor(domain: string, ssl: boolean): Promise<CertInfo> {
+  if (!ssl) return { status: "off", message: "TLS is off for this site", expires: null };
+  try {
+    const fs = await import("node:fs/promises");
+    const raw = await fs.readFile("/var/lib/keel/certs.json", "utf8");
+    const all = JSON.parse(raw) as Record<
+      string,
+      { status?: string; message?: string; expires?: string }
+    >;
+    const row = all[domain];
+    if (!row) {
+      return { status: "pending", message: "Certificate not issued yet", expires: null };
+    }
+    const status =
+      row.status === "live" || row.status === "error" || row.status === "pending"
+        ? row.status
+        : "pending";
+    return {
+      status,
+      message: row.message || "",
+      expires: row.expires || null,
+    };
+  } catch {
+    return { status: "pending", message: "Certificate not issued yet", expires: null };
+  }
+}
+
 export const getSite = createServerFn({ method: "GET" })
   .validator(z.object({ id: z.number() }))
   .handler(async ({ data }) => {
@@ -291,7 +319,9 @@ export const getSite = createServerFn({ method: "GET" })
     const rows = await sql<Record<string, unknown>>`
       select * from sites where id = ${data.id}
     `;
-    return rows[0] ? mapSite(rows[0]) : null;
+    const site = rows[0] ? mapSite(rows[0]) : null;
+    if (!site) return null;
+    return { ...site, cert: await certFor(site.domain, site.ssl) };
   });
 
 const siteCreateSchema = z.object({
@@ -371,6 +401,20 @@ export const updateSite = createServerFn({ method: "POST" })
     }
     await applyAfterChange(sql);
     return mapSite(rows[0]);
+  });
+
+export const retrySiteTls = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ id: z.number() }))
+  .handler(async ({ data }) => {
+    const sql = await getSql();
+    await applyAfterChange(sql);
+    const rows = await sql<Record<string, unknown>>`
+      select * from sites where id = ${data.id}
+    `;
+    const site = rows[0] ? mapSite(rows[0]) : null;
+    if (!site) return null;
+    return { ...site, cert: await certFor(site.domain, site.ssl) };
   });
 
 export const deleteSite = createServerFn({ method: "POST" })
