@@ -115,15 +115,20 @@ cd /opt/keel
 export VITE_AUTH_ENABLED="${VITE_AUTH_ENABLED:-false}"
 export KEEL_VPS=1
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=2048}"
-if [ -f package-lock.json ]; then
-  npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+if [ -f /opt/keel/.output/server/index.mjs ] && [ "${KEEL_REBUILD:-0}" != "1" ]; then
+  log "Panel already built — skip compile (KEEL_REBUILD=1 to force)"
 else
-  npm install --no-audit --no-fund
+  if [ -f package-lock.json ]; then
+    npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+  else
+    npm install --no-audit --no-fund
+  fi
+  npm run build
 fi
-npm run build
 # PGlite wasm/data must sit next to the bundled module (usually _libs/).
-node scripts/copy-pglite-assets.mjs
-# Keep a hard fallback if the helper is missing on an older checkout.
+if [ -f scripts/copy-pglite-assets.mjs ]; then
+  node scripts/copy-pglite-assets.mjs
+fi
 if [ -d /opt/keel/.output/server ]; then
   PGLITE_DIST="$(find /opt/keel/node_modules/@electric-sql/pglite -type d -name dist 2>/dev/null | head -1 || true)"
   if [ -n "$PGLITE_DIST" ] && [ -f "$PGLITE_DIST/pglite.data" ]; then
@@ -200,7 +205,10 @@ JSON
 fi
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-# Give the panel a moment to bind, then fail loudly if it did not.
+# Last step: always take port 80 from the distro welcome page and reload nginx.
+# apt starts nginx during package install; enable --now does not pick up our vhost.
+log "Activate panel on port 80"
+/usr/local/sbin/keel fix
 sleep 2
 if ! systemctl is-active --quiet keel-panel; then
   echo "keel-panel failed to start:"
