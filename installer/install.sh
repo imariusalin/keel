@@ -141,7 +141,11 @@ chown -R keel:keel /var/lib/keel
 chown -R keel:keel /opt/keel
 
 log "Nginx panel vhost"
-rm -f /etc/nginx/sites-enabled/default
+# Distro welcome page wins if it stays enabled (it is also default_server).
+rm -f /etc/nginx/sites-enabled/default \
+      /etc/nginx/sites-enabled/default.conf \
+      /etc/nginx/conf.d/default.conf
+find /etc/nginx/sites-enabled -maxdepth 1 -name '*default*' -delete 2>/dev/null || true
 install -m 0644 /usr/local/share/keel/templates/nginx-panel.conf /etc/nginx/sites-available/keel-panel.conf
 sed -i "s/127.0.0.1:9090/127.0.0.1:${PANEL_PORT}/" /etc/nginx/sites-available/keel-panel.conf
 ln -sfn /etc/nginx/sites-available/keel-panel.conf /etc/nginx/sites-enabled/keel-panel.conf
@@ -164,7 +168,10 @@ sed \
   -e "s|^ExecStart=.*|ExecStart=${EXEC}|" \
   "$HERE/templates/keel-panel.service" > /etc/systemd/system/keel-panel.service
 systemctl daemon-reload
-systemctl enable --now nginx fail2ban keel-panel
+systemctl enable nginx fail2ban keel-panel
+systemctl restart keel-panel
+# apt starts nginx with the welcome page; enable --now does not reload it.
+systemctl reload nginx || systemctl restart nginx
 
 log "Firewall"
 ufw --force reset >/dev/null 2>&1 || true
@@ -193,6 +200,13 @@ JSON
 fi
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+# Give the panel a moment to bind, then fail loudly if it did not.
+sleep 2
+if ! systemctl is-active --quiet keel-panel; then
+  echo "keel-panel failed to start:"
+  journalctl -u keel-panel -n 40 --no-pager || true
+  die "panel service is not running"
+fi
 log "Keel is installed."
 echo
 echo "    Panel  http://${IP:-<server-ip>}/"

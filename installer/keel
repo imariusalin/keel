@@ -29,6 +29,13 @@ case "$cmd" in
   doctor)
     echo "-- nginx"
     nginx -t
+    if [ -e /etc/nginx/sites-enabled/default ]; then
+      echo "WARN: distro default site still enabled — you will see Welcome to nginx"
+    fi
+    echo "-- panel"
+    systemctl is-active keel-panel && echo "keel-panel: running" || echo "keel-panel: DOWN"
+    curl -sf -o /dev/null -w "local_panel HTTP %{http_code}\n" "http://127.0.0.1:9090/" \
+      || echo "local_panel: not answering on :9090"
     echo "-- php-fpm"
     for v in 8.1 8.2 8.3 8.4; do
       if systemctl list-unit-files "php${v}-fpm.service" >/dev/null 2>&1; then
