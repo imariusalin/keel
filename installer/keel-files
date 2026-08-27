@@ -1,0 +1,410 @@
+#!/usr/bin/env python3
+"""Privileged file ops for the Keel panel. JSON on stdin, JSON on stdout.
+
+The panel user `keel` may sudo this binary with no password. Every path is
+jailed to /home/<site-or-app-user>/(www|app). New files are chowned to that user.
+"""
+from __future__ import annotations
+
+import base64
+import json
+import os
+import pwd
+import re
+import shutil
+import stat
+import sys
+from datetime import datetime, timezone
+from typing import Any
+
+MAX_READ = 1_048_576
+MAX_TRANSFER = 4 * 1024 * 1024
+MAX_LIST = 2000
+ROOT_RE = re.compile(r"^/home/([a-z_][a-z0-9_-]{0,31})/(www|app)$")
+
+TEXT_EXT = {
+    "php", "phtml", "js", "mjs", "cjs", "ts", "tsx", "jsx", "json", "jsonc",
+    "css", "scss", "less", "html", "htm", "shtml", "md", "markdown", "txt",
+    "log", "csv", "xml", "svg", "xsl", "yml", "yaml", "env", "conf", "cnf",
+    "ini", "toml", "sql", "sh", "bash", "zsh", "htaccess", "htpasswd", "map",
+    "lock", "vue", "svelte", "twig", "gitignore", "gitattributes",
+    "editorconfig", "nvmrc", "npmrc", "prettierrc", "eslintrc",
+}
+IMAGE_EXT = {"png", "jpg", "jpeg", "gif", "webp", "ico", "bmp", "svg"}
+SPECIAL_TEXT = {
+    "dockerfile", "makefile", "procfile", "readme", "license", "changelog",
+    ".htaccess", ".htpasswd", ".env", ".gitignore", ".gitattributes",
+    ".npmrc", ".nvmrc", ".editorconfig", ".prettierrc", ".eslintrc",
+}
+MIME = {
+    "php": "text/x-php", "js": "text/javascript", "json": "application/json",
+    "css": "text/css", "html": "text/html", "htm": "text/html",
+    "md": "text/markdown", "txt": "text/plain", "svg": "image/svg+xml",
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "gif": "image/gif", "webp": "image/webp", "ico": "image/x-icon",
+}
+
+
+def fail(msg: str, code: int = 1) -> None:
+    sys.stdout.write(json.dumps({"ok": False, "error": msg}) + "\n")
+    raise SystemExit(code)
+
+
+def split_rel(rel: str) -> list[str]:
+    if not isinstance(rel, str):
+        raise ValueError("Path required")
+    if "\x00" in rel:
+        raise ValueError("Invalid path")
+    n = rel.replace("\\", "/")
+    if re.match(r"^[a-zA-Z]:", n):
+        raise ValueError("Absolute path")
+    parts = [p for p in n.split("/") if p and p != "."]
+    if any(p in ("..", "~") for p in parts):
+        raise ValueError("Path escapes jail")
+    return parts
+
+
+def virt_norm(rel: str) -> str:
+    parts = split_rel(rel)
+    return "/" if not parts else "/" + "/".join(parts)
+
+
+def virt_parent(rel: str) -> str | None:
+    parts = split_rel(rel)
+    if not parts:
+        return None
+    parts.pop()
+    return "/" if not parts else "/" + "/".join(parts)
+
+
+def ext_of(name: str) -> str:
+    base = name.lower()
+    i = base.rfind(".")
+    if i <= 0:
+        return ""
+    return base[i + 1 :]
+
+
+def classify(name: str) -> tuple[bool, str]:
+    lower = name.lower()
+    if lower in SPECIAL_TEXT:
+        return True, "text"
+    ext = ext_of(name)
+    image = ext in IMAGE_EXT
+    text = ext in TEXT_EXT
+    if text and image:
+        return True, "image"
+    if text:
+        return True, "text"
+    if image:
+        return False, "image"
+    return False, "none"
+
+
+def mime_for(name: str) -> str:
+    return MIME.get(ext_of(name), "application/octet-stream")
+
+
+def format_mode(mode: int) -> str:
+    return f"{stat.S_IMODE(mode):04o}"
+
+
+def parse_mode(raw: str) -> int:
+    s = raw.strip().removeprefix("0o")
+    if not re.match(r"^[0-7]{3,4}$", s):
+        raise ValueError("Mode must be octal, like 0644")
+    n = int(s, 8)
+    if n < 0 or n > 0o777:
+        raise ValueError("Mode must be octal, like 0644")
+    return n
+
+
+def check_root(root: str) -> tuple[str, str]:
+    if not isinstance(root, str) or not ROOT_RE.match(root):
+        raise ValueError("Jail root is not a site or app home")
+    user = root.split("/")[2]
+    if not os.path.isdir(root):
+        raise ValueError("Jail does not exist on this server")
+    real = os.path.realpath(root)
+    home = f"/home/{user}"
+    if real != home and not real.startswith(home + "/"):
+        raise ValueError("Jail root resolves outside the home")
+    pwd.getpwnam(user)
+    return real, user
+
+
+def inside(jail: str, target: str) -> bool:
+    jail = os.path.realpath(jail)
+    target = os.path.abspath(target)
+    return target == jail or target.startswith(jail + os.sep)
+
+
+def join_jail(jail: str, rel: str) -> str:
+    parts = split_rel(rel)
+    resolved = os.path.abspath(os.path.join(jail, *parts) if parts else jail)
+    if not inside(jail, resolved):
+        raise ValueError("Path escapes jail")
+    return resolved
+
+
+def owner_ids(user: str) -> tuple[int, int]:
+    pw = pwd.getpwnam(user)
+    return pw.pw_uid, pw.pw_gid
+
+
+def chown_path(path: str, user: str) -> None:
+    uid, gid = owner_ids(user)
+    os.chown(path, uid, gid)
+
+
+def iso(mtime: float) -> str:
+    return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def assert_safe(jail: str, abs_path: str, must_exist: bool = False) -> os.stat_result | None:
+    if not inside(jail, abs_path):
+        raise ValueError("Path escapes jail")
+    try:
+        st = os.lstat(abs_path)
+    except FileNotFoundError:
+        if must_exist:
+            raise
+        return None
+    if stat.S_ISLNK(st.st_mode):
+        real = os.path.realpath(abs_path)
+        if not inside(jail, real):
+            raise ValueError("Symlink leaves the jail")
+    return st
+
+
+def entry_of(jail: str, abs_path: str, name: str, virt: str) -> dict[str, Any]:
+    st = os.lstat(abs_path)
+    editable, preview = classify(name)
+    item: dict[str, Any] = {
+        "name": name,
+        "path": virt,
+        "kind": "file",
+        "size": st.st_size,
+        "mtime": iso(st.st_mtime),
+        "mode": format_mode(st.st_mode),
+        "hidden": name.startswith("."),
+        "editable": editable,
+        "preview": preview,
+        "unsafe": False,
+    }
+    if stat.S_ISDIR(st.st_mode):
+        item.update(kind="dir", size=0, editable=False, preview="none")
+        return item
+    if stat.S_ISLNK(st.st_mode):
+        item["kind"] = "link"
+        try:
+            real = os.path.realpath(abs_path)
+            if not inside(jail, real):
+                item.update(unsafe=True, editable=False, preview="none")
+        except OSError:
+            item.update(unsafe=True, editable=False, preview="none")
+        return item
+    return item
+
+
+def looks_binary(data: bytes) -> bool:
+    return b"\x00" in data[:8000]
+
+
+def op_list(jail: str, rel: str) -> dict[str, Any]:
+    d = join_jail(jail, rel)
+    st = assert_safe(jail, d, must_exist=True)
+    if st is None or not stat.S_ISDIR(st.st_mode):
+        raise ValueError("Not a directory")
+    names = sorted(os.listdir(d), key=lambda s: s.lower())
+    truncated = len(names) > MAX_LIST
+    names = names[:MAX_LIST]
+    virt = virt_norm(rel)
+    entries = []
+    for name in names:
+        abs_path = os.path.join(d, name)
+        if not inside(jail, abs_path):
+            continue
+        virt_path = f"/{name}" if virt == "/" else f"{virt}/{name}"
+        entries.append(entry_of(jail, abs_path, name, virt_path))
+    entries.sort(key=lambda e: (0 if e["kind"] == "dir" else 1, e["name"].lower()))
+    return {
+        "ok": True,
+        "path": virt,
+        "parent": virt_parent(virt),
+        "entries": entries,
+        "truncated": truncated,
+    }
+
+
+def op_read(jail: str, rel: str, binary: bool) -> dict[str, Any]:
+    abs_path = join_jail(jail, rel)
+    st = assert_safe(jail, abs_path, must_exist=True)
+    if st is None or stat.S_ISDIR(st.st_mode):
+        raise ValueError("Cannot read a directory")
+    limit = MAX_TRANSFER if binary else MAX_READ
+    if st.st_size > limit:
+        raise ValueError("File is too large for the panel (4 MB limit). Use SSH for bigger files.")
+    with open(abs_path, "rb") as fh:
+        data = fh.read()
+    name = os.path.basename(abs_path)
+    editable, preview = classify(name)
+    virt = virt_norm(rel)
+    if binary:
+        return {
+            "ok": True,
+            "name": name,
+            "path": virt,
+            "content": base64.b64encode(data).decode("ascii"),
+            "encoding": "base64",
+            "size": len(data),
+            "mime": mime_for(name),
+            "editable": editable and not looks_binary(data),
+            "preview": preview,
+        }
+    if looks_binary(data):
+        raise ValueError("Binary file — download it instead")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("File is not valid UTF-8 — download it instead") from exc
+    return {
+        "ok": True,
+        "name": name,
+        "path": virt,
+        "content": text,
+        "encoding": "utf8",
+        "size": len(data),
+        "mime": mime_for(name),
+        "editable": editable,
+        "preview": preview,
+    }
+
+
+def op_write(jail: str, rel: str, content: str, encoding: str, user: str) -> dict[str, Any]:
+    abs_path = join_jail(jail, rel)
+    parent = os.path.dirname(abs_path)
+    assert_safe(jail, parent, must_exist=True)
+    raw = base64.b64decode(content) if encoding == "base64" else content.encode("utf-8")
+    if len(raw) > MAX_TRANSFER:
+        raise ValueError("File exceeds the 4 MB panel limit")
+    with open(abs_path, "wb") as fh:
+        fh.write(raw)
+    os.chmod(abs_path, 0o644)
+    chown_path(abs_path, user)
+    return {"ok": True, "path": virt_norm(rel), "size": len(raw)}
+
+
+def op_create(jail: str, rel: str, user: str) -> dict[str, Any]:
+    abs_path = join_jail(jail, rel)
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    fd = os.open(abs_path, flags, 0o644)
+    os.close(fd)
+    chown_path(abs_path, user)
+    return {"ok": True, "path": virt_norm(rel)}
+
+
+def op_mkdir(jail: str, rel: str, user: str) -> dict[str, Any]:
+    abs_path = join_jail(jail, rel)
+    os.mkdir(abs_path, 0o755)
+    chown_path(abs_path, user)
+    return {"ok": True, "path": virt_norm(rel)}
+
+
+def op_rename(jail: str, rel: str, to: str) -> dict[str, Any]:
+    if virt_norm(rel) == "/":
+        raise ValueError("Cannot rename the jail root")
+    src = join_jail(jail, rel)
+    dest = join_jail(jail, to)
+    assert_safe(jail, src, must_exist=True)
+    assert_safe(jail, os.path.dirname(dest), must_exist=True)
+    os.rename(src, dest)
+    return {"ok": True, "path": virt_norm(to)}
+
+
+def op_delete(jail: str, rel: str) -> dict[str, Any]:
+    if virt_norm(rel) == "/":
+        raise ValueError("Cannot delete the jail root")
+    abs_path = join_jail(jail, rel)
+    assert_safe(jail, abs_path, must_exist=True)
+    if os.path.isdir(abs_path) and not os.path.islink(abs_path):
+        shutil.rmtree(abs_path)
+    else:
+        os.unlink(abs_path)
+    return {"ok": True}
+
+
+def op_chmod(jail: str, rel: str, mode: str) -> dict[str, Any]:
+    abs_path = join_jail(jail, rel)
+    assert_safe(jail, abs_path, must_exist=True)
+    n = parse_mode(mode)
+    os.chmod(abs_path, n)
+    return {"ok": True, "mode": format_mode(n)}
+
+
+def op_copy(jail: str, rel: str, to: str, user: str) -> dict[str, Any]:
+    src = join_jail(jail, rel)
+    dest = join_jail(jail, to)
+    assert_safe(jail, src, must_exist=True)
+    assert_safe(jail, os.path.dirname(dest), must_exist=True)
+    if os.path.exists(dest):
+        raise ValueError("Destination already exists")
+    if os.path.isdir(src) and not os.path.islink(src):
+        shutil.copytree(src, dest, symlinks=True)
+    else:
+        shutil.copy2(src, dest, follow_symlinks=False)
+    uid, gid = owner_ids(user)
+
+    def chown_tree(p: str) -> None:
+        os.chown(p, uid, gid, follow_symlinks=False)
+        if os.path.isdir(p) and not os.path.islink(p):
+            for name in os.listdir(p):
+                chown_tree(os.path.join(p, name))
+
+    chown_tree(dest)
+    return {"ok": True, "path": virt_norm(to)}
+
+
+def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        sys.stdout.write(
+            "keel-files — JSON on stdin. Ops: list read write create mkdir rename delete chmod copy move\n"
+        )
+        return
+    try:
+        raw = sys.stdin.read()
+        req = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        fail("Invalid JSON")
+    try:
+        op = str(req.get("op") or "")
+        root = str(req.get("root") or "")
+        rel = str(req.get("rel") or "/")
+        jail, user = check_root(root)
+        if op == "list":
+            out = op_list(jail, rel)
+        elif op == "read":
+            out = op_read(jail, rel, bool(req.get("binary")))
+        elif op == "write":
+            out = op_write(jail, rel, str(req.get("content") or ""), str(req.get("encoding") or "utf8"), user)
+        elif op == "create":
+            out = op_create(jail, rel, user)
+        elif op == "mkdir":
+            out = op_mkdir(jail, rel, user)
+        elif op == "rename" or op == "move":
+            out = op_rename(jail, rel, str(req.get("to") or ""))
+        elif op == "delete":
+            out = op_delete(jail, rel)
+        elif op == "chmod":
+            out = op_chmod(jail, rel, str(req.get("mode") or ""))
+        elif op == "copy":
+            out = op_copy(jail, rel, str(req.get("to") or ""), user)
+        else:
+            raise ValueError(f"Unknown op {op}")
+        sys.stdout.write(json.dumps(out) + "\n")
+    except (ValueError, OSError, KeyError, FileExistsError) as exc:
+        fail(str(exc) or exc.__class__.__name__)
+
+
+if __name__ == "__main__":
+    main()

@@ -14,15 +14,23 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as SetupRouteImport } from './routes/setup'
 import { Route as PanelIndexRouteImport } from './routes/_panel.index'
 import { Route as PanelAppsRouteImport } from './routes/_panel.apps'
+import { Route as PanelBackupsRouteImport } from './routes/_panel.backups'
+import { Route as PanelCronRouteImport } from './routes/_panel.cron'
 import { Route as PanelDnsRouteImport } from './routes/_panel.dns'
+import { Route as PanelFilesRouteImport } from './routes/_panel.files'
 import { Route as PanelFirewallRouteImport } from './routes/_panel.firewall'
 import { Route as PanelInstallRouteImport } from './routes/_panel.install'
+import { Route as PanelIpsRouteImport } from './routes/_panel.ips'
 import { Route as PanelMailRouteImport } from './routes/_panel.mail'
 import { Route as PanelModulesRouteImport } from './routes/_panel.modules'
+import { Route as PanelRedisRouteImport } from './routes/_panel.redis'
 import { Route as PanelSettingsRouteImport } from './routes/_panel.settings'
 import { Route as PanelSitesRouteImport } from './routes/_panel.sites'
 import { Route as PanelSitesIndexRouteImport } from './routes/_panel.sites.index'
 import { Route as PanelSitesIdRouteImport } from './routes/_panel.sites.$id'
+import { Route as WebmailRouteImport } from './routes/webmail'
+import { Route as WebmailIndexRouteImport } from './routes/webmail.index'
+import { Route as WebmailInboxRouteImport } from './routes/webmail.inbox'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
 const PanelRoute = PanelRouteImport.update({
@@ -39,6 +47,21 @@ const SetupRoute = SetupRouteImport.update({
   path: '/setup',
   getParentRoute: () => rootRouteImport,
 } as any)
+const WebmailRoute = WebmailRouteImport.update({
+  id: '/webmail',
+  path: '/webmail',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WebmailIndexRoute = WebmailIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => WebmailRoute,
+} as any)
+const WebmailInboxRoute = WebmailInboxRouteImport.update({
+  id: '/inbox',
+  path: '/inbox',
+  getParentRoute: () => WebmailRoute,
+} as any)
 const PanelIndexRoute = PanelIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -49,9 +72,24 @@ const PanelAppsRoute = PanelAppsRouteImport.update({
   path: '/apps',
   getParentRoute: () => PanelRoute,
 } as any)
+const PanelBackupsRoute = PanelBackupsRouteImport.update({
+  id: '/backups',
+  path: '/backups',
+  getParentRoute: () => PanelRoute,
+} as any)
+const PanelCronRoute = PanelCronRouteImport.update({
+  id: '/cron',
+  path: '/cron',
+  getParentRoute: () => PanelRoute,
+} as any)
 const PanelDnsRoute = PanelDnsRouteImport.update({
   id: '/dns',
   path: '/dns',
+  getParentRoute: () => PanelRoute,
+} as any)
+const PanelFilesRoute = PanelFilesRouteImport.update({
+  id: '/files',
+  path: '/files',
   getParentRoute: () => PanelRoute,
 } as any)
 const PanelFirewallRoute = PanelFirewallRouteImport.update({
@@ -64,9 +102,19 @@ const PanelInstallRoute = PanelInstallRouteImport.update({
   path: '/install',
   getParentRoute: () => PanelRoute,
 } as any)
+const PanelIpsRoute = PanelIpsRouteImport.update({
+  id: '/ips',
+  path: '/ips',
+  getParentRoute: () => PanelRoute,
+} as any)
 const PanelMailRoute = PanelMailRouteImport.update({
   id: '/mail',
   path: '/mail',
+  getParentRoute: () => PanelRoute,
+} as any)
+const PanelRedisRoute = PanelRedisRouteImport.update({
+  id: '/redis',
+  path: '/redis',
   getParentRoute: () => PanelRoute,
 } as any)
 const PanelModulesRoute = PanelModulesRouteImport.update({
@@ -105,31 +153,46 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
   '/apps': typeof PanelAppsRoute
+  '/backups': typeof PanelBackupsRoute
+  '/cron': typeof PanelCronRoute
   '/dns': typeof PanelDnsRoute
+  '/files': typeof PanelFilesRoute
   '/firewall': typeof PanelFirewallRoute
   '/install': typeof PanelInstallRoute
+  '/ips': typeof PanelIpsRoute
   '/mail': typeof PanelMailRoute
   '/modules': typeof PanelModulesRoute
+  '/redis': typeof PanelRedisRoute
   '/settings': typeof PanelSettingsRoute
   '/sites': typeof PanelSitesRouteWithChildren
   '/sites/$id': typeof PanelSitesIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/sites/': typeof PanelSitesIndexRoute
+  '/webmail': typeof WebmailRouteWithChildren
+  '/webmail/': typeof WebmailIndexRoute
+  '/webmail/inbox': typeof WebmailInboxRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
   '/apps': typeof PanelAppsRoute
+  '/backups': typeof PanelBackupsRoute
+  '/cron': typeof PanelCronRoute
   '/dns': typeof PanelDnsRoute
+  '/files': typeof PanelFilesRoute
   '/firewall': typeof PanelFirewallRoute
   '/install': typeof PanelInstallRoute
+  '/ips': typeof PanelIpsRoute
   '/mail': typeof PanelMailRoute
   '/modules': typeof PanelModulesRoute
+  '/redis': typeof PanelRedisRoute
   '/settings': typeof PanelSettingsRoute
   '/': typeof PanelIndexRoute
   '/sites/$id': typeof PanelSitesIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/sites': typeof PanelSitesIndexRoute
+  '/webmail': typeof WebmailIndexRoute
+  '/webmail/inbox': typeof WebmailInboxRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -137,17 +200,25 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/setup': typeof SetupRoute
   '/_panel/apps': typeof PanelAppsRoute
+  '/_panel/backups': typeof PanelBackupsRoute
+  '/_panel/cron': typeof PanelCronRoute
   '/_panel/dns': typeof PanelDnsRoute
+  '/_panel/files': typeof PanelFilesRoute
   '/_panel/firewall': typeof PanelFirewallRoute
   '/_panel/install': typeof PanelInstallRoute
+  '/_panel/ips': typeof PanelIpsRoute
   '/_panel/mail': typeof PanelMailRoute
   '/_panel/modules': typeof PanelModulesRoute
+  '/_panel/redis': typeof PanelRedisRoute
   '/_panel/settings': typeof PanelSettingsRoute
   '/_panel/sites': typeof PanelSitesRouteWithChildren
   '/_panel/': typeof PanelIndexRoute
   '/_panel/sites/$id': typeof PanelSitesIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/_panel/sites/': typeof PanelSitesIndexRoute
+  '/webmail': typeof WebmailRouteWithChildren
+  '/webmail/': typeof WebmailIndexRoute
+  '/webmail/inbox': typeof WebmailInboxRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -156,54 +227,78 @@ export interface FileRouteTypes {
     | '/login'
     | '/setup'
     | '/apps'
+    | '/backups'
+    | '/cron'
     | '/dns'
+    | '/files'
     | '/firewall'
     | '/install'
+    | '/ips'
     | '/mail'
     | '/modules'
+    | '/redis'
     | '/settings'
     | '/sites'
     | '/sites/$id'
     | '/api/auth/$'
     | '/sites/'
+    | '/webmail'
+    | '/webmail/'
+    | '/webmail/inbox'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
     | '/setup'
     | '/apps'
+    | '/backups'
+    | '/cron'
     | '/dns'
+    | '/files'
     | '/firewall'
     | '/install'
+    | '/ips'
     | '/mail'
     | '/modules'
+    | '/redis'
     | '/settings'
     | '/'
     | '/sites/$id'
     | '/api/auth/$'
     | '/sites'
+    | '/webmail'
+    | '/webmail/inbox'
   id:
     | '__root__'
     | '/_panel'
     | '/login'
     | '/setup'
     | '/_panel/apps'
+    | '/_panel/backups'
+    | '/_panel/cron'
     | '/_panel/dns'
+    | '/_panel/files'
     | '/_panel/firewall'
     | '/_panel/install'
+    | '/_panel/ips'
     | '/_panel/mail'
     | '/_panel/modules'
+    | '/_panel/redis'
     | '/_panel/settings'
     | '/_panel/sites'
     | '/_panel/'
     | '/_panel/sites/$id'
     | '/api/auth/$'
     | '/_panel/sites/'
+    | '/webmail'
+    | '/webmail/'
+    | '/webmail/inbox'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   PanelRoute: typeof PanelRouteWithChildren
   LoginRoute: typeof LoginRoute
   SetupRoute: typeof SetupRoute
+  WebmailRoute: typeof WebmailRouteWithChildren
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
 
@@ -230,6 +325,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SetupRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/webmail': {
+      id: '/webmail'
+      path: '/webmail'
+      fullPath: '/webmail'
+      preLoaderRoute: typeof WebmailRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/webmail/': {
+      id: '/webmail/'
+      path: '/'
+      fullPath: '/webmail/'
+      preLoaderRoute: typeof WebmailIndexRouteImport
+      parentRoute: typeof WebmailRoute
+    }
+    '/webmail/inbox': {
+      id: '/webmail/inbox'
+      path: '/inbox'
+      fullPath: '/webmail/inbox'
+      preLoaderRoute: typeof WebmailInboxRouteImport
+      parentRoute: typeof WebmailRoute
+    }
     '/_panel/': {
       id: '/_panel/'
       path: '/'
@@ -244,11 +360,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PanelAppsRouteImport
       parentRoute: typeof PanelRoute
     }
+    '/_panel/backups': {
+      id: '/_panel/backups'
+      path: '/backups'
+      fullPath: '/backups'
+      preLoaderRoute: typeof PanelBackupsRouteImport
+      parentRoute: typeof PanelRoute
+    }
+    '/_panel/cron': {
+      id: '/_panel/cron'
+      path: '/cron'
+      fullPath: '/cron'
+      preLoaderRoute: typeof PanelCronRouteImport
+      parentRoute: typeof PanelRoute
+    }
     '/_panel/dns': {
       id: '/_panel/dns'
       path: '/dns'
       fullPath: '/dns'
       preLoaderRoute: typeof PanelDnsRouteImport
+      parentRoute: typeof PanelRoute
+    }
+    '/_panel/files': {
+      id: '/_panel/files'
+      path: '/files'
+      fullPath: '/files'
+      preLoaderRoute: typeof PanelFilesRouteImport
       parentRoute: typeof PanelRoute
     }
     '/_panel/firewall': {
@@ -265,11 +402,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PanelInstallRouteImport
       parentRoute: typeof PanelRoute
     }
+    '/_panel/ips': {
+      id: '/_panel/ips'
+      path: '/ips'
+      fullPath: '/ips'
+      preLoaderRoute: typeof PanelIpsRouteImport
+      parentRoute: typeof PanelRoute
+    }
     '/_panel/mail': {
       id: '/_panel/mail'
       path: '/mail'
       fullPath: '/mail'
       preLoaderRoute: typeof PanelMailRouteImport
+      parentRoute: typeof PanelRoute
+    }
+    '/_panel/redis': {
+      id: '/_panel/redis'
+      path: '/redis'
+      fullPath: '/redis'
+      preLoaderRoute: typeof PanelRedisRouteImport
       parentRoute: typeof PanelRoute
     }
     '/_panel/modules': {
@@ -333,11 +484,16 @@ const PanelSitesRouteWithChildren = PanelSitesRoute._addFileChildren(
 
 interface PanelRouteChildren {
   PanelAppsRoute: typeof PanelAppsRoute
+  PanelBackupsRoute: typeof PanelBackupsRoute
+  PanelCronRoute: typeof PanelCronRoute
   PanelDnsRoute: typeof PanelDnsRoute
+  PanelFilesRoute: typeof PanelFilesRoute
   PanelFirewallRoute: typeof PanelFirewallRoute
   PanelInstallRoute: typeof PanelInstallRoute
+  PanelIpsRoute: typeof PanelIpsRoute
   PanelMailRoute: typeof PanelMailRoute
   PanelModulesRoute: typeof PanelModulesRoute
+  PanelRedisRoute: typeof PanelRedisRoute
   PanelSettingsRoute: typeof PanelSettingsRoute
   PanelSitesRoute: typeof PanelSitesRouteWithChildren
   PanelIndexRoute: typeof PanelIndexRoute
@@ -345,11 +501,16 @@ interface PanelRouteChildren {
 
 const PanelRouteChildren: PanelRouteChildren = {
   PanelAppsRoute: PanelAppsRoute,
+  PanelBackupsRoute: PanelBackupsRoute,
+  PanelCronRoute: PanelCronRoute,
   PanelDnsRoute: PanelDnsRoute,
+  PanelFilesRoute: PanelFilesRoute,
   PanelFirewallRoute: PanelFirewallRoute,
   PanelInstallRoute: PanelInstallRoute,
+  PanelIpsRoute: PanelIpsRoute,
   PanelMailRoute: PanelMailRoute,
   PanelModulesRoute: PanelModulesRoute,
+  PanelRedisRoute: PanelRedisRoute,
   PanelSettingsRoute: PanelSettingsRoute,
   PanelSitesRoute: PanelSitesRouteWithChildren,
   PanelIndexRoute: PanelIndexRoute,
@@ -357,10 +518,23 @@ const PanelRouteChildren: PanelRouteChildren = {
 
 const PanelRouteWithChildren = PanelRoute._addFileChildren(PanelRouteChildren)
 
+interface WebmailRouteChildren {
+  WebmailIndexRoute: typeof WebmailIndexRoute
+  WebmailInboxRoute: typeof WebmailInboxRoute
+}
+
+const WebmailRouteChildren: WebmailRouteChildren = {
+  WebmailIndexRoute: WebmailIndexRoute,
+  WebmailInboxRoute: WebmailInboxRoute,
+}
+
+const WebmailRouteWithChildren = WebmailRoute._addFileChildren(WebmailRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   PanelRoute: PanelRouteWithChildren,
   LoginRoute: LoginRoute,
   SetupRoute: SetupRoute,
+  WebmailRoute: WebmailRouteWithChildren,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport

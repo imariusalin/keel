@@ -1,7 +1,7 @@
 import type { Sql } from "@/lib/db";
 import {
   mapApp,
-  mapMailbox,
+  mapBackupJob,
   mapModule,
   mapRecord,
   mapRule,
@@ -29,18 +29,48 @@ export async function dumpAndApply(sql: Sql): Promise<void> {
   const modules = (await sql<Record<string, unknown>>`select slug, enabled from modules`).map(
     mapModule,
   );
-  const sites = (await sql<Record<string, unknown>>`select * from sites`).map(mapSite);
-  const apps = (await sql<Record<string, unknown>>`select * from node_apps`).map(mapApp);
+  const sites = (await sql<Record<string, unknown>>`
+    select sites.*, ip_addresses.address as ip_address
+    from sites
+    left join ip_addresses on ip_addresses.id = sites.ip_id
+  `).map(mapSite);
+  const apps = (await sql<Record<string, unknown>>`
+    select node_apps.*, ip_addresses.address as ip_address
+    from node_apps
+    left join ip_addresses on ip_addresses.id = node_apps.ip_id
+  `).map(mapApp);
   const firewall = (await sql<Record<string, unknown>>`select * from firewall_rules`).map(
     mapRule,
   );
-  const mailboxes = (await sql<Record<string, unknown>>`select * from mailboxes`).map(
-    mapMailbox,
-  );
+  const mailboxRows = await sql<Record<string, unknown>>`
+    select address, status, quota_mb, password_hash from mailboxes
+  `;
   const zones = (await sql<Record<string, unknown>>`select * from dns_zones`).map(mapZone);
   const records = (await sql<Record<string, unknown>>`select * from dns_records`).map(
     mapRecord,
   );
+  let backupRows: Record<string, unknown>[] = [];
+  try {
+    backupRows = await sql<Record<string, unknown>>`
+      select backup_jobs.*,
+        coalesce(sites.domain, node_apps.domain) as target_label
+      from backup_jobs
+      left join sites on backup_jobs.scope = 'site' and sites.id = backup_jobs.target_id
+      left join node_apps on backup_jobs.scope = 'app' and node_apps.id = backup_jobs.target_id
+    `;
+  } catch {
+    backupRows = [];
+  }
+  const cronRows = await sql<Record<string, unknown>>`
+    select cron_jobs.*,
+      sites.domain as site_domain,
+      sites.jail_user as site_user,
+      node_apps.name as app_name,
+      node_apps.domain as app_domain
+    from cron_jobs
+    left join sites on cron_jobs.kind = 'site' and sites.id = cron_jobs.target_id
+    left join node_apps on cron_jobs.kind = 'app' and node_apps.id = cron_jobs.target_id
+  `;
 
   const moduleMap: Record<string, boolean> = {};
   for (const m of modules) moduleMap[m.slug] = m.enabled;
@@ -64,6 +94,7 @@ export async function dumpAndApply(sql: Sql): Promise<void> {
       isolated: site.isolated,
       ssl: site.ssl,
       forceHttps: site.forceHttps,
+      ip: site.ipAddress || "",
     })),
     apps: apps.map((app) => ({
       name: app.name,
@@ -72,6 +103,7 @@ export async function dumpAndApply(sql: Sql): Promise<void> {
       port: app.port,
       entry: app.entry,
       status: app.status,
+      ip: app.ipAddress || "",
     })),
     firewall: firewall.map((rule) => ({
       enabled: rule.enabled,
@@ -80,10 +112,60 @@ export async function dumpAndApply(sql: Sql): Promise<void> {
       port: rule.port,
       source: rule.source,
     })),
-    mailboxes: mailboxes.map((box) => ({
-      address: box.address,
-      status: box.status,
+    mailboxes: mailboxRows.map((box) => ({
+      address: String(box.address),
+      status: box.status === "disabled" ? "disabled" : "active",
+      quotaMb: Number(box.quota_mb) || 2048,
+      passwordHash: String(box.password_hash || ""),
     })),
+    backups: backupRows.map((row) => {
+      const job = mapBackupJob(row);
+      return {
+        id: job.id,
+        name: job.name,
+        scope: job.scope,
+        targetId: job.targetId,
+        targetDomain: String(row.target_label || ""),
+        includeMail: job.includeMail,
+        schedule: job.schedule,
+        retain: job.retain,
+        enabled: job.enabled,
+        rsyncEnabled: job.rsyncEnabled,
+        rsyncDest: job.rsyncDest,
+        rsyncSshKey: job.rsyncSshKey,
+        s3Enabled: job.s3Enabled,
+        s3Bucket: job.s3Bucket,
+        s3Prefix: job.s3Prefix,
+        s3Region: job.s3Region,
+        s3AccessKey: job.s3AccessKey,
+        s3SecretKey: String(row.s3_secret_key || ""),
+        s3Endpoint: job.s3Endpoint,
+      };
+    }),
+    cron: cronRows
+      .filter((row) => row.enabled === true || row.enabled === "t" || row.enabled === 1)
+      .map((row) => {
+        const kind = row.kind === "app" ? "app" : "site";
+        const appName = String(row.app_name || "");
+        const slug = appName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-|-$/g, "")
+          .slice(0, 20);
+        const user =
+          kind === "site"
+            ? String(row.site_user || "")
+            : `ka_${slug || "app"}`;
+        const cwd =
+          kind === "site" ? `/home/${user}/www` : `/home/${user}/app`;
+        return {
+          enabled: true,
+          user,
+          schedule: String(row.schedule),
+          command: String(row.command),
+          cwd,
+        };
+      }),
     dns: {
       zones: zones.map((zone) => ({
         name: zone.name,

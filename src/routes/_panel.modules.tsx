@@ -14,7 +14,6 @@ export const Route = createFileRoute("/_panel/modules")({
 function ModulesPage() {
   const modules = Route.useLoaderData();
   const router = useRouter();
-  const coming = new Set(["backups", "redis"]);
 
   return (
     <div>
@@ -32,7 +31,6 @@ function ModulesPage() {
                   <h2 className="text-sm font-medium">{mod.name}</h2>
                   <Badge variant="outline">v{mod.version}</Badge>
                   {mod.core ? <Badge>core</Badge> : null}
-                  {coming.has(mod.slug) ? <Badge variant="warn">next pack</Badge> : null}
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">{mod.description}</p>
               </div>
@@ -41,8 +39,11 @@ function ModulesPage() {
                 onCheckedChange={(v) =>
                   void toggleModule({ data: { id: mod.id, enabled: v } })
                     .then(() => {
-                      if (coming.has(mod.slug) && v) {
-                        toast.message("Enabled — management UI ships in the next pack");
+                      if (mod.slug === "redis" && v) {
+                        toast.success("Redis will install and start — it also starts after reboot");
+                      }
+                      if (mod.slug === "redis" && !v) {
+                        toast.message("Redis stopped. Package stays; it will not start on reboot");
                       }
                       return router.invalidate();
                     })

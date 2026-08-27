@@ -18,3 +18,5 @@ AGENTS.md
 AGENTS.project.md
 pglite-debug.log
 *.tsbuildinfo
+__pycache__/
+*.pyc

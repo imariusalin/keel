@@ -8,7 +8,7 @@ usage() {
 keel ${VERSION}
   apply [--dry-run]   write nginx, PHP-FPM, firewall, mail, DNS from panel state
   doctor              check nginx, PHP, disk, firewall
-  status              panel + stack units
+  status              panel + stack units (nginx, redis if installed)
   fix                 put the panel on port 80 (disable welcome page, reload nginx)
   version
 EOF
@@ -45,6 +45,20 @@ case "$cmd" in
   status)
     systemctl is-active --quiet keel-panel && echo "panel: running" || echo "panel: down"
     systemctl is-active --quiet nginx && echo "nginx: running" || echo "nginx: down"
+    if systemctl cat redis-server.service >/dev/null 2>&1 || systemctl cat redis.service >/dev/null 2>&1; then
+      ru=redis-server
+      systemctl cat redis-server.service >/dev/null 2>&1 || ru=redis
+      if systemctl is-active --quiet "$ru"; then
+        printf 'redis: running'
+      else
+        printf 'redis: stopped'
+      fi
+      if systemctl is-enabled --quiet "$ru" 2>/dev/null; then
+        echo " (enabled at boot)"
+      else
+        echo " (disabled at boot — package kept)"
+      fi
+    fi
     ufw status | head -1 || true
     ;;
   doctor)
@@ -63,6 +77,16 @@ case "$cmd" in
         printf '  php%s-fpm %s\n' "$v" "$(systemctl is-active php${v}-fpm 2>/dev/null || echo missing)"
       fi
     done
+    echo "-- redis"
+    if command -v redis-server >/dev/null 2>&1; then
+      ru=redis-server
+      systemctl cat redis-server.service >/dev/null 2>&1 || ru=redis
+      printf '  installed  %s\n' "$(redis-server --version 2>/dev/null | awk '{print $3}' | tr -d 'v=')"
+      printf '  active     %s\n' "$(systemctl is-active "$ru" 2>/dev/null || echo unknown)"
+      printf '  boot       %s\n' "$(systemctl is-enabled "$ru" 2>/dev/null || echo disabled)"
+    else
+      echo "  not installed (enable the Redis module in the panel)"
+    fi
     echo "-- disk"
     df -h / /var /home 2>/dev/null | awk 'NR==1 || /\/$|\/var|\/home/'
     echo "-- firewall"

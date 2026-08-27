@@ -1,10 +1,16 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import {
+  Archive,
   Box,
+  Clock,
+  Database,
+  FolderOpen,
   Globe,
+  Inbox,
   LayoutDashboard,
   Mail,
   Menu,
+  Network,
   Puzzle,
   Server,
   Settings,
@@ -32,7 +38,11 @@ const NAV: { title: string; items: NavItem[] }[] = [
       { to: "/", label: "Overview", icon: LayoutDashboard },
       { to: "/sites", label: "Sites", icon: Globe, module: "php" },
       { to: "/apps", label: "Node apps", icon: Box, module: "node" },
+      { to: "/files", label: "Files", icon: FolderOpen },
       { to: "/mail", label: "Mail", icon: Mail, module: "mail" },
+      { to: "/webmail", label: "Webmail", icon: Inbox, module: "mail" },
+      { to: "/cron", label: "Cron", icon: Clock },
+      { to: "/redis", label: "Redis", icon: Database, module: "redis" },
     ],
   },
   {
@@ -40,6 +50,8 @@ const NAV: { title: string; items: NavItem[] }[] = [
     items: [
       { to: "/firewall", label: "Firewall", icon: Shield, module: "firewall" },
       { to: "/dns", label: "DNS", icon: Server, module: "dns" },
+      { to: "/ips", label: "IPs", icon: Network },
+      { to: "/backups", label: "Backups", icon: Archive },
     ],
   },
   {

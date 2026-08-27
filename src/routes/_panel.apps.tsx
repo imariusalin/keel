@@ -1,5 +1,5 @@
-import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { Box, MoreHorizontal, Plus } from "lucide-react";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { Box, FolderOpen, MoreHorizontal, Plus } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
@@ -132,6 +132,11 @@ function AppsPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  {app.ipAddress ? (
+                    <Badge variant="outline" className="font-mono">
+                      {app.ipAddress}
+                    </Badge>
+                  ) : null}
                   <Badge variant={app.status === "running" ? "ok" : "warn"}>{app.status}</Badge>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -140,6 +145,16 @@ function AppsPage() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
+                      <DropdownMenuItem asChild>
+                        <Link
+                          to="/files"
+                          search={{ kind: "app", id: app.id }}
+                          className="flex items-center gap-2"
+                        >
+                          <FolderOpen className="size-4" />
+                          Files
+                        </Link>
+                      </DropdownMenuItem>
                       <DropdownMenuItem
                         onClick={() =>
                           void updateApp({

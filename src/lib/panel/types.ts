@@ -29,6 +29,8 @@ export type Site = {
   pool: string;
   status: "active" | "stopped";
   memoryLimit: string;
+  ipId: number | null;
+  ipAddress: string | null;
   createdAt: string;
 };
 
@@ -48,6 +50,8 @@ export type NodeApp = {
   entry: string;
   instances: number;
   memoryMb: number;
+  ipId: number | null;
+  ipAddress: string | null;
   createdAt: string;
 };
 
@@ -68,6 +72,32 @@ export type Mailbox = {
   quotaMb: number;
   usedMb: number;
   status: "active" | "disabled";
+  hasPassword: boolean;
+  createdAt: string;
+};
+
+export type IpAddress = {
+  id: number;
+  address: string;
+  label: string;
+  siteId: number | null;
+  appId: number | null;
+  assignedTo: string | null;
+  createdAt: string;
+};
+
+export type { BackupJob, BackupRun, BackupScope } from "./backup";
+
+export type CronJob = {
+  id: number;
+  kind: "site" | "app";
+  targetId: number;
+  targetLabel: string;
+  user: string;
+  name: string;
+  schedule: string;
+  command: string;
+  enabled: boolean;
   createdAt: string;
 };
 

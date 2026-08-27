@@ -1,0 +1,375 @@
+#!/usr/bin/env python3
+"""Keel backups: tar locally, then push the same archive with rsync and/or S3.
+
+JSON on stdout. Reads jobs from /var/lib/keel/state.json (or stdin for tests).
+"""
+from __future__ import annotations
+
+import datetime
+import hashlib
+import hmac
+import http.client
+import json
+import os
+import re
+import subprocess
+import sys
+import tarfile
+from urllib.parse import quote
+
+STATE = os.environ.get("KEEL_STATE", "/var/lib/keel/state.json")
+ROOT = os.environ.get("KEEL_BACKUP_ROOT", "/var/lib/keel/backups")
+HISTORY = os.path.join(ROOT, "history.jsonl")
+
+
+def fail(msg: str, code: int = 1) -> None:
+    sys.stdout.write(json.dumps({"ok": False, "error": msg}) + "\n")
+    raise SystemExit(code)
+
+
+def load_state() -> dict:
+    with open(STATE, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def job_slug(name: str, job_id: int) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:24]
+    return f"{job_id}-{s or 'job'}"
+
+
+def app_home(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:20] or "app"
+    return f"/home/ka_{slug}"
+
+
+USER_RE = re.compile(r"^(s_|ka_)[a-z0-9_-]{1,30}$")
+
+
+def allowed_src(src: str) -> bool:
+    real = os.path.realpath(src)
+    try:
+        state_real = os.path.realpath(STATE) if os.path.exists(STATE) else STATE
+    except OSError:
+        state_real = STATE
+    if real == state_real:
+        return True
+    mail = "/var/mail/keel"
+    if real == mail or real.startswith(mail + os.sep):
+        return True
+    parts = real.split(os.sep)
+    if len(parts) >= 3 and parts[1] == "home" and USER_RE.match(parts[2] or ""):
+        return True
+    return False
+
+
+def collect_paths(state: dict, job: dict) -> list[tuple[str, str]]:
+    scope = job.get("scope") or "all"
+    target_id = job.get("targetId")
+    include_mail = job.get("includeMail", True)
+    out: list[tuple[str, str]] = []
+    sites = state.get("sites") or []
+    apps = state.get("apps") or []
+    if scope in ("all", "sites", "site"):
+        for site in sites:
+            if scope == "site":
+                domain = str(site.get("domain") or "")
+                want = str(job.get("targetDomain") or "")
+                if not want or domain != want:
+                    continue
+            user = str(site.get("systemUser") or "")
+            if user:
+                out.append((f"site-{site.get('domain')}", f"/home/{user}"))
+    if scope in ("all", "apps", "app"):
+        for app in apps:
+            if scope == "app":
+                want = str(job.get("targetDomain") or "")
+                if not want or str(app.get("domain") or "") != want:
+                    continue
+            name = str(app.get("name") or app.get("domain") or "")
+            if name:
+                out.append((f"app-{app.get('domain')}", app_home(name)))
+    if include_mail or scope == "mail":
+        if scope in ("all", "mail") or include_mail:
+            if os.path.isdir("/var/mail/keel"):
+                out.append(("mail", "/var/mail/keel"))
+    if os.path.isfile(STATE):
+        out.append(("panel-state", STATE))
+    # de-dupe
+    seen = set()
+    uniq = []
+    for label, src in out:
+        if src in seen:
+            continue
+        seen.add(src)
+        uniq.append((label, src))
+    return uniq
+
+
+def stamp() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+
+def make_archive(dest: str, paths: list[tuple[str, str]]) -> tuple[int, list[str]]:
+    skipped: list[str] = []
+    with tarfile.open(dest, "w:gz") as tar:
+        for label, src in paths:
+            if not os.path.exists(src):
+                skipped.append(src)
+                continue
+            if not allowed_src(src):
+                skipped.append(src)
+                continue
+            tar.add(src, arcname=label, recursive=True)
+    return os.path.getsize(dest), skipped
+
+
+def prune(dir_path: str, retain: int) -> None:
+    files = sorted(
+        [
+            os.path.join(dir_path, n)
+            for n in os.listdir(dir_path)
+            if n.startswith("keel-") and n.endswith(".tar.gz")
+        ]
+    )
+    while len(files) > max(1, retain):
+        old = files.pop(0)
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+
+
+def run_rsync(archive: str, dest: str, ssh_key: str) -> str:
+    if re.search(r"[\n\r;|&$`]", dest) or " " in dest:
+        raise ValueError("unsafe rsync destination")
+    if not dest.startswith("rsync://") and not re.match(
+        r"^([A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:\S+$", dest
+    ):
+        raise ValueError("unsafe rsync destination")
+    cmd = ["rsync", "-az", "--partial", archive]
+    if ssh_key:
+        if not ssh_key.startswith("/") or ".." in ssh_key or re.search(r"[\s;|&$`]", ssh_key):
+            raise ValueError("unsafe SSH key path")
+        rsh = (
+            "ssh -i "
+            + ssh_key
+            + " -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+        )
+        cmd[1:1] = ["-e", rsh]
+    dest_dir = dest if dest.endswith("/") else dest + "/"
+    cmd.append(dest_dir)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "rsync failed").strip()[:400])
+    return "rsync ok"
+
+
+def sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while True:
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def s3_put(archive: str, job: dict) -> str:
+    bucket = str(job.get("s3Bucket") or "")
+    prefix = str(job.get("s3Prefix") or "keel/")
+    region = str(job.get("s3Region") or "us-east-1")
+    access = str(job.get("s3AccessKey") or "")
+    secret = str(job.get("s3SecretKey") or "")
+    endpoint = str(job.get("s3Endpoint") or "").strip()
+    if not bucket or not access or not secret:
+        raise ValueError("S3 bucket and keys are required")
+    key = prefix.lstrip("/")
+    if key and not key.endswith("/"):
+        key += "/"
+    key += os.path.basename(archive)
+    payload_hash = sha256_file(archive)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    amz = now.strftime("%Y%m%dT%H%M%SZ")
+    datestamp = now.strftime("%Y%m%d")
+    size = os.path.getsize(archive)
+    encoded = quote(key, safe="/-._~")
+    if endpoint:
+        host = endpoint.replace("https://", "").replace("http://", "").split("/")[0]
+        uri = "/" + bucket + "/" + encoded
+        tls = not endpoint.startswith("http://")
+    else:
+        host = f"{bucket}.s3.{region}.amazonaws.com"
+        uri = "/" + encoded
+        tls = True
+    canonical_headers = f"host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz}\n"
+    signed = "host;x-amz-content-sha256;x-amz-date"
+    canonical_request = f"PUT\n{uri}\n\n{canonical_headers}\n{signed}\n{payload_hash}"
+    scope = f"{datestamp}/{region}/s3/aws4_request"
+    string_to_sign = (
+        "AWS4-HMAC-SHA256\n"
+        f"{amz}\n"
+        f"{scope}\n"
+        f"{hashlib.sha256(canonical_request.encode()).hexdigest()}"
+    )
+
+    def hm(key: bytes, msg: str) -> bytes:
+        return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+    k_date = hm(("AWS4" + secret).encode("utf-8"), datestamp)
+    k_region = hmac.new(k_date, region.encode(), hashlib.sha256).digest()
+    k_service = hmac.new(k_region, b"s3", hashlib.sha256).digest()
+    k_signing = hmac.new(k_service, b"aws4_request", hashlib.sha256).digest()
+    signature = hmac.new(k_signing, string_to_sign.encode(), hashlib.sha256).hexdigest()
+    auth = (
+        f"AWS4-HMAC-SHA256 Credential={access}/{scope}, "
+        f"SignedHeaders={signed}, Signature={signature}"
+    )
+    headers = {
+        "Host": host,
+        "x-amz-date": amz,
+        "x-amz-content-sha256": payload_hash,
+        "Authorization": auth,
+        "Content-Length": str(size),
+        "Content-Type": "application/gzip",
+    }
+    conn: http.client.HTTPSConnection | http.client.HTTPConnection
+    if tls:
+        conn = http.client.HTTPSConnection(host, timeout=600)
+    else:
+        conn = http.client.HTTPConnection(host, timeout=600)
+    with open(archive, "rb") as fh:
+        conn.request("PUT", uri, body=fh, headers=headers)
+        resp = conn.getresponse()
+        body = resp.read()[:300]
+        status = resp.status
+    conn.close()
+    if status not in (200, 201, 204):
+        raise RuntimeError(f"S3 PUT {status}: {body.decode('utf-8', 'replace')}")
+    return f"s3://{bucket}/{key}"
+
+
+def append_history(row: dict) -> None:
+    os.makedirs(ROOT, exist_ok=True)
+    with open(HISTORY, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row) + "\n")
+
+
+def run_job(state: dict, job: dict) -> dict:
+    started = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    name = str(job.get("name") or "backup")
+    job_id = int(job.get("id") or 0)
+    retain = int(job.get("retain") or 7)
+    os.makedirs(ROOT, exist_ok=True)
+    root_real = os.path.realpath(ROOT)
+    dest_dir = os.path.realpath(os.path.join(ROOT, job_slug(name, job_id)))
+    if dest_dir != root_real and not dest_dir.startswith(root_real + os.sep):
+        raise ValueError("backup path leaves store")
+    os.makedirs(dest_dir, exist_ok=True)
+    archive = os.path.join(dest_dir, f"keel-{stamp()}.tar.gz")
+    paths = collect_paths(state, job)
+    local_ok = False
+    rsync_ok = False
+    s3_ok = False
+    rsync_on = bool(job.get("rsyncEnabled"))
+    s3_on = bool(job.get("s3Enabled"))
+    size = 0
+    notes: list[str] = []
+    try:
+        size, skipped = make_archive(archive, paths)
+        local_ok = True
+        if skipped:
+            notes.append("skipped missing: " + ", ".join(skipped[:8]))
+        prune(dest_dir, retain)
+    except Exception as exc:
+        notes.append(f"local: {exc}")
+        try:
+            if os.path.isfile(archive):
+                os.remove(archive)
+        except OSError:
+            pass
+        archive = ""
+
+    if local_ok and rsync_on:
+        try:
+            notes.append(
+                run_rsync(archive, str(job.get("rsyncDest") or ""), str(job.get("rsyncSshKey") or ""))
+            )
+            rsync_ok = True
+        except Exception as exc:
+            notes.append(f"rsync: {exc}")
+
+    if local_ok and s3_on:
+        try:
+            notes.append("s3 " + s3_put(archive, job))
+            s3_ok = True
+        except Exception as exc:
+            notes.append(f"s3: {exc}")
+
+    if local_ok and (not rsync_on or rsync_ok) and (not s3_on or s3_ok):
+        status = "ok"
+    elif local_ok:
+        status = "partial"
+    else:
+        status = "error"
+    finished = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    row = {
+        "ok": status != "error",
+        "jobId": job_id,
+        "name": name,
+        "status": status,
+        "startedAt": started,
+        "finishedAt": finished,
+        "sizeBytes": size,
+        "localPath": archive,
+        "localOk": local_ok,
+        "rsyncEnabled": rsync_on,
+        "rsyncOk": rsync_ok,
+        "s3Enabled": s3_on,
+        "s3Ok": s3_ok,
+        "message": "; ".join(notes),
+    }
+    append_history(row)
+    return row
+
+
+def find_job(state: dict, job_id: int) -> dict:
+    for job in state.get("backups") or []:
+        if int(job.get("id") or 0) == job_id:
+            return job
+    raise ValueError(f"backup job {job_id} not in state")
+
+
+def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        sys.stdout.write("keel-backup run <id> | keel-backup cron\n")
+        return
+    try:
+        state = load_state()
+    except FileNotFoundError:
+        fail("no state.json — apply the panel first")
+    except json.JSONDecodeError:
+        fail("state.json is not valid JSON")
+    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    try:
+        if cmd == "run":
+            if len(sys.argv) < 3:
+                fail("usage: keel-backup run <id>")
+            job = find_job(state, int(sys.argv[2]))
+            out = run_job(state, job)
+            sys.stdout.write(json.dumps(out) + "\n")
+        elif cmd == "cron":
+            results = []
+            for job in state.get("backups") or []:
+                if not job.get("enabled"):
+                    continue
+                results.append(run_job(state, job))
+            sys.stdout.write(json.dumps({"ok": True, "ran": len(results)}) + "\n")
+        else:
+            fail("usage: keel-backup run <id> | keel-backup cron")
+    except (ValueError, OSError, RuntimeError) as exc:
+        fail(str(exc) or exc.__class__.__name__)
+
+
+if __name__ == "__main__":
+    main()

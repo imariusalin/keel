@@ -171,6 +171,16 @@ case ",$MODULES_CSV," in
     ;;
 esac
 
+# Redis is off by default. Enable it in the panel to install; disable only stops
+# the service (the package is never removed).
+case ",$MODULES_CSV," in
+  *,redis,*)
+    log "Redis"
+    apt-get install -y --no-install-recommends redis-server \
+      || apt-get install -y --no-install-recommends redis
+    ;;
+esac
+
 log "Users and directories"
 id -u keel >/dev/null 2>&1 || useradd --system --home /var/lib/keel --shell /usr/sbin/nologin keel
 id -u keelwww >/dev/null 2>&1 || useradd --system --home /nonexistent --shell /usr/sbin/nologin keelwww
@@ -212,6 +222,8 @@ rsync -a --delete \
   "$REPO/" /opt/keel/
 install -m 0755 "$HERE/keel-apply" /usr/local/sbin/keel-apply
 install -m 0755 "$HERE/keel" /usr/local/sbin/keel
+install -m 0755 "$HERE/keel-files" /usr/local/sbin/keel-files
+install -m 0755 "$HERE/keel-backup" /usr/local/sbin/keel-backup
 install -m 0644 "$HERE/templates/sudoers" /etc/sudoers.d/keel
 chmod 0440 /etc/sudoers.d/keel
 visudo -cf /etc/sudoers.d/keel >/dev/null

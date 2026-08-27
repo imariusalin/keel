@@ -1,5 +1,5 @@
-import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { Mail, Plus } from "lucide-react";
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router";
+import { ExternalLink, Inbox, KeyRound, Mail, Plus, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
@@ -18,11 +18,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
+import type { DnsCheckResult } from "@/lib/panel/dns-check";
+import { generateMailboxPassword } from "@/lib/panel/net";
 import {
+  checkMailDns,
   createMailbox,
   deleteMailbox,
   listMailDns,
   listMailboxes,
+  setMailboxPassword,
   toggleMailbox,
 } from "@/lib/panel/server";
 import { formatBytes } from "@/lib/utils";
@@ -41,17 +45,29 @@ function MailPage() {
   const [open, setOpen] = useState(false);
   const [address, setAddress] = useState("");
   const [quota, setQuota] = useState("2048");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pwBox, setPwBox] = useState<{ id: number; address: string } | null>(null);
+  const [pwValue, setPwValue] = useState("");
+  const [checks, setChecks] = useState<Record<string, DnsCheckResult>>({});
+  const [checking, setChecking] = useState<string | null>(null);
 
   async function onCreate() {
+    if (password !== confirm) {
+      toast.error("Passwords do not match");
+      return;
+    }
     setBusy(true);
     try {
       await createMailbox({
-        data: { address, quotaMb: Number(quota) || 2048 },
+        data: { address, quotaMb: Number(quota) || 2048, password },
       });
-      toast.success("Mailbox created — MX, SPF, DKIM, DMARC records written");
+      toast.success("Mailbox created — IMAP password set, mail DNS written");
       setOpen(false);
       setAddress("");
+      setPassword("");
+      setConfirm("");
       await router.invalidate();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not create mailbox");
@@ -60,54 +76,138 @@ function MailPage() {
     }
   }
 
+  async function onSetPassword() {
+    if (!pwBox) return;
+    setBusy(true);
+    try {
+      await setMailboxPassword({ data: { id: pwBox.id, password: pwValue } });
+      toast.success(`Password updated for ${pwBox.address}`);
+      setPwBox(null);
+      setPwValue("");
+      await router.invalidate();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not set password");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onCheck(domain: string) {
+    setChecking(domain);
+    try {
+      const result = await checkMailDns({ data: { domain } });
+      setChecks((prev) => ({ ...prev, [domain]: result }));
+      if (result.ok) toast.success(`${domain} — public DNS matches`);
+      else toast.message(`${domain} — some records are missing on the public internet`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "DNS check failed");
+    } finally {
+      setChecking(null);
+    }
+  }
+
   return (
     <div>
       <PageHeader
         kicker="Mail"
         title="Mailboxes"
-        description="Creating a mailbox writes MX, SPF, DKIM, and DMARC for that domain. Point the domain’s nameservers here, or copy the records to your DNS host."
+        description="Each mailbox needs a password. Creating one writes MX, SPF, DKIM, and DMARC. Check live DNS against Cloudflare’s resolver."
         action={
-          <Button onClick={() => setOpen(true)}>
-            <Plus className="size-4" />
-            New mailbox
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline">
+              <Link to="/webmail">
+                <Inbox className="size-4" />
+                Webmail
+              </Link>
+            </Button>
+            <Button onClick={() => setOpen(true)}>
+              <Plus className="size-4" />
+              New mailbox
+            </Button>
+          </div>
         }
       />
 
       {dns.length > 0 ? (
         <div className="mb-6 grid gap-3">
-          {dns.map((zone) => (
-            <Card key={zone.domain}>
-              <CardContent className="p-5">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <p className="text-sm font-medium">{zone.domain} DNS</p>
-                  <Badge variant={zone.records.every((r) => r.present) ? "ok" : "warn"}>
-                    {zone.records.filter((r) => r.present).length}/{zone.records.length} records
-                  </Badge>
-                </div>
-                <ul className="space-y-2 font-mono text-xs">
-                  {zone.records.map((rec) => (
-                    <li
-                      key={`${rec.type}-${rec.name}`}
-                      className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-3"
-                    >
-                      <span className="w-16 shrink-0 text-muted-foreground">{rec.type}</span>
-                      <span className="w-28 shrink-0">{rec.name}</span>
-                      <span className="min-w-0 flex-1 truncate">{rec.value}</span>
-                      <Badge variant={rec.present ? "ok" : "warn"}>
-                        {rec.present ? "set" : "missing"}
+          {dns.map((zone) => {
+            const live = checks[zone.domain];
+            return (
+              <Card key={zone.domain}>
+                <CardContent className="p-5">
+                  <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-sm font-medium">{zone.domain} DNS</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={zone.records.every((r) => r.present) ? "ok" : "warn"}>
+                        panel {zone.records.filter((r) => r.present).length}/{zone.records.length}
                       </Badge>
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
-          ))}
+                      {live ? (
+                        <Badge variant={live.ok ? "ok" : "warn"}>
+                          live {live.records.filter((r) => r.ok).length}/{live.records.length}
+                        </Badge>
+                      ) : null}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={checking === zone.domain}
+                        onClick={() => void onCheck(zone.domain)}
+                      >
+                        <ShieldCheck className="size-4" />
+                        {checking === zone.domain ? "Checking…" : "Check live DNS"}
+                      </Button>
+                      <Button asChild variant="ghost" size="sm">
+                        <a
+                          href={`https://mxtoolbox.com/SuperTool.aspx?action=mx%3a${encodeURIComponent(zone.domain)}&run=toolpage`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <ExternalLink className="size-4" />
+                          MXToolbox
+                        </a>
+                      </Button>
+                    </div>
+                  </div>
+                  <ul className="space-y-2 font-mono text-xs">
+                    {zone.records.map((rec) => {
+                      const liveRec = live?.records.find(
+                        (r) => r.type === rec.type && r.name === rec.name,
+                      );
+                      return (
+                        <li
+                          key={`${rec.type}-${rec.name}`}
+                          className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-3"
+                        >
+                          <span className="w-16 shrink-0 text-muted-foreground">{rec.type}</span>
+                          <span className="w-28 shrink-0">{rec.name}</span>
+                          <span className="min-w-0 flex-1 truncate">{rec.value}</span>
+                          <Badge variant={rec.present ? "ok" : "warn"}>
+                            {rec.present ? "panel" : "missing"}
+                          </Badge>
+                          {liveRec ? (
+                            <Badge variant={liveRec.ok ? "ok" : "warn"}>
+                              {liveRec.ok ? "live" : "not live"}
+                            </Badge>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {live && !live.ok ? (
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      Public DNS (Cloudflare 1.1.1.1) does not yet match. Point the domain’s
+                      nameservers here, or copy the records to your DNS host, then check again.
+                    </p>
+                  ) : null}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       ) : (
         <Card className="mb-6">
           <CardContent className="p-5 text-sm text-muted-foreground">
-            Add a mailbox and Keel will detect the domain, then write the mail DNS records automatically.
+            Add a mailbox and Keel will detect the domain, then write the mail DNS records
+            automatically.
           </CardContent>
         </Card>
       )}
@@ -127,10 +227,13 @@ function MailPage() {
               <Card key={box.id}>
                 <CardContent className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center">
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <p className="truncate font-medium">{box.address}</p>
                       <Badge variant={box.status === "active" ? "ok" : "default"}>
                         {box.status}
+                      </Badge>
+                      <Badge variant={box.hasPassword ? "ok" : "warn"}>
+                        {box.hasPassword ? "password set" : "no password"}
                       </Badge>
                     </div>
                     <div className="mt-2 max-w-sm">
@@ -140,7 +243,24 @@ function MailPage() {
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button asChild variant="outline" size="sm">
+                      <Link to="/webmail" search={{ address: box.address }}>
+                        <Inbox className="size-4" />
+                        Webmail
+                      </Link>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setPwBox({ id: box.id, address: box.address });
+                        setPwValue("");
+                      }}
+                    >
+                      <KeyRound className="size-4" />
+                      {box.hasPassword ? "Reset password" : "Set password"}
+                    </Button>
                     <Switch
                       checked={box.status === "active"}
                       onCheckedChange={(v) =>
@@ -173,7 +293,7 @@ function MailPage() {
           <DialogHeader>
             <DialogTitle>New mailbox</DialogTitle>
             <DialogDescription>
-              Keel writes MX, A, SPF, DKIM, and DMARC for the domain automatically.
+              Sets the IMAP/SMTP password and writes MX, A, SPF, DKIM, and DMARC.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">
@@ -184,6 +304,7 @@ function MailPage() {
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
                 placeholder="hello@example.com"
+                autoComplete="off"
               />
             </div>
             <div className="grid gap-2">
@@ -195,13 +316,91 @@ function MailPage() {
                 inputMode="numeric"
               />
             </div>
+            <div className="grid gap-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="pw">Password</Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    const next = generateMailboxPassword();
+                    setPassword(next);
+                    setConfirm(next);
+                  }}
+                >
+                  Generate
+                </Button>
+              </div>
+              <Input
+                id="pw"
+                type="text"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="new-password"
+                spellCheck={false}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="pw2">Confirm</Label>
+              <Input
+                id="pw2"
+                type="text"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                autoComplete="new-password"
+                spellCheck={false}
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={() => void onCreate()} disabled={busy || !address}>
+            <Button
+              onClick={() => void onCreate()}
+              disabled={busy || !address || password.length < 8}
+            >
               {busy ? "Creating…" : "Create mailbox"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(pwBox)} onOpenChange={(o) => !o && setPwBox(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Password for {pwBox?.address}</DialogTitle>
+            <DialogDescription>
+              Stored as a Dovecot hash. The panel never shows the current password.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="reset-pw">New password</Label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setPwValue(generateMailboxPassword())}
+              >
+                Generate
+              </Button>
+            </div>
+            <Input
+              id="reset-pw"
+              value={pwValue}
+              onChange={(e) => setPwValue(e.target.value)}
+              autoComplete="new-password"
+              spellCheck={false}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPwBox(null)}>
+              Cancel
+            </Button>
+            <Button onClick={() => void onSetPassword()} disabled={busy || pwValue.length < 8}>
+              Save password
             </Button>
           </DialogFooter>
         </DialogContent>

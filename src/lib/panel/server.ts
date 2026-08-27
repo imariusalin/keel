@@ -6,7 +6,9 @@ import { normalizeDomain, systemUserFromDomain } from "@/lib/utils";
 import { applyAfterChange, isVpsApply, publicIp, readHostMetrics } from "./apply";
 import { bootstrapAdminIfNeeded, hasAdminUser } from "./bootstrap-admin";
 import { displayUsername, toAuthEmail } from "./admin-id";
-import { describeMailDns, ensureHostDns, ensureMailDns, mailboxDomain } from "./dns-auto";
+import { checkMailDnsLive } from "./dns-check";
+import { describeMailDns, ensureHostDns, ensureMailDns, mailboxDomain, mailDnsBlueprint } from "./dns-auto";
+import { hashMailboxPassword } from "./mail-pass";
 import {
   mapActivity,
   mapApp,
@@ -77,16 +79,16 @@ const MODULES = [
   {
     slug: "backups",
     name: "Backups",
-    description: "Scheduled snapshots. Ships in the next pack.",
-    version: "0.1",
+    description: "Local archives, plus rsync and S3 in the same run.",
+    version: "1.0",
     core: false,
     sort: 7,
   },
   {
     slug: "redis",
     name: "Redis",
-    description: "In-memory cache for apps. Ships in the next pack.",
-    version: "0.1",
+    description: "Local cache on 127.0.0.1. Off by default. Disable stops it; the package stays.",
+    version: "1.0",
     core: false,
     sort: 8,
   },
@@ -177,8 +179,15 @@ async function ensureSetup(sql: Sql): Promise<void> {
     `;
     await logActivity(sql, "setup", "Keel is ready");
   }
-  await seedModules(sql, ["php", "node", "firewall", "ssl", "mail", "dns"]);
+  await seedModules(sql, ["php", "node", "firewall", "ssl", "mail", "dns", "backups"]);
   await seedBaseFirewall(sql);
+  for (const mod of MODULES) {
+    await sql`
+      update modules
+      set name = ${mod.name}, description = ${mod.description}, version = ${mod.version}, sort_order = ${mod.sort}
+      where slug = ${mod.slug}
+    `;
+  }
 }
 
 export const adminStatus = createServerFn({ method: "GET" }).handler(async () => {
@@ -247,10 +256,16 @@ export const getDashboard = createServerFn({ method: "GET" }).handler(
       select * from modules order by sort_order
     `).map(mapModule);
     const sites = (await sql<Record<string, unknown>>`
-      select * from sites order by created_at desc
+      select sites.*, ip_addresses.address as ip_address
+      from sites
+      left join ip_addresses on ip_addresses.id = sites.ip_id
+      order by sites.created_at desc
     `).map(mapSite);
     const apps = (await sql<Record<string, unknown>>`
-      select * from node_apps order by created_at desc
+      select node_apps.*, ip_addresses.address as ip_address
+      from node_apps
+      left join ip_addresses on ip_addresses.id = node_apps.ip_id
+      order by node_apps.created_at desc
     `).map(mapApp);
     const activity = (await sql<Record<string, unknown>>`
       select * from activity order by created_at desc limit 8
@@ -280,9 +295,12 @@ export const getDashboard = createServerFn({ method: "GET" }).handler(
 
 export const listSites = createServerFn({ method: "GET" }).handler(async () => {
   const sql = await getSql();
-  return (await sql<Record<string, unknown>>`select * from sites order by domain`).map(
-    mapSite,
-  );
+  return (await sql<Record<string, unknown>>`
+    select sites.*, ip_addresses.address as ip_address
+    from sites
+    left join ip_addresses on ip_addresses.id = sites.ip_id
+    order by domain
+  `).map(mapSite);
 });
 
 async function certFor(domain: string, ssl: boolean): Promise<CertInfo> {
@@ -317,7 +335,10 @@ export const getSite = createServerFn({ method: "GET" })
   .handler(async ({ data }) => {
     const sql = await getSql();
     const rows = await sql<Record<string, unknown>>`
-      select * from sites where id = ${data.id}
+      select sites.*, ip_addresses.address as ip_address
+      from sites
+      left join ip_addresses on ip_addresses.id = sites.ip_id
+      where sites.id = ${data.id}
     `;
     const site = rows[0] ? mapSite(rows[0]) : null;
     if (!site) return null;
@@ -434,9 +455,12 @@ export const deleteSite = createServerFn({ method: "POST" })
 
 export const listApps = createServerFn({ method: "GET" }).handler(async () => {
   const sql = await getSql();
-  return (await sql<Record<string, unknown>>`select * from node_apps order by name`).map(
-    mapApp,
-  );
+  return (await sql<Record<string, unknown>>`
+    select node_apps.*, ip_addresses.address as ip_address
+    from node_apps
+    left join ip_addresses on ip_addresses.id = node_apps.ip_id
+    order by name
+  `).map(mapApp);
 });
 
 export const createApp = createServerFn({ method: "POST" })
@@ -581,9 +605,12 @@ export const deleteFirewallRule = createServerFn({ method: "POST" })
 
 export const listMailboxes = createServerFn({ method: "GET" }).handler(async () => {
   const sql = await getSql();
-  return (await sql<Record<string, unknown>>`select * from mailboxes order by address`).map(
-    mapMailbox,
-  );
+  return (await sql<Record<string, unknown>>`
+    select id, address, quota_mb, used_mb, status, created_at,
+      (password_hash is not null and password_hash <> '') as has_password
+    from mailboxes
+    order by address
+  `).map(mapMailbox);
 });
 
 export const createMailbox = createServerFn({ method: "POST" })
@@ -592,20 +619,46 @@ export const createMailbox = createServerFn({ method: "POST" })
     z.object({
       address: z.string().min(3).max(120),
       quotaMb: z.number().min(128).max(51200),
+      password: z.string().min(8).max(128),
     }),
   )
   .handler(async ({ data }) => {
     const sql = await getSql();
     const address = data.address.trim().toLowerCase();
+    if (!/^[a-z0-9._+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(address)) {
+      throw new Error("Enter a full address like hello@example.com");
+    }
+    const hash = hashMailboxPassword(data.password);
     const rows = await sql<Record<string, unknown>>`
-      insert into mailboxes (address, quota_mb, used_mb, status)
-      values (${address}, ${data.quotaMb}, 0, 'active')
-      returning *
+      insert into mailboxes (address, quota_mb, used_mb, status, password_hash)
+      values (${address}, ${data.quotaMb}, 0, 'active', ${hash})
+      returning id, address, quota_mb, used_mb, status, created_at
     `;
     await logActivity(sql, "mail", `Created mailbox ${address}`);
     await ensureMailDns(sql, address);
     await applyAfterChange(sql);
-    return mapMailbox(rows[0]);
+    return mapMailbox({ ...rows[0], has_password: true });
+  });
+
+export const setMailboxPassword = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(
+    z.object({
+      id: z.number(),
+      password: z.string().min(8).max(128),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const sql = await getSql();
+    const hash = hashMailboxPassword(data.password);
+    const rows = await sql<Record<string, unknown>>`
+      update mailboxes set password_hash = ${hash} where id = ${data.id}
+      returning id, address, quota_mb, used_mb, status, created_at
+    `;
+    if (!rows[0]) throw new Error("Mailbox not found");
+    await logActivity(sql, "mail", `Set password for ${String(rows[0].address)}`);
+    await applyAfterChange(sql);
+    return mapMailbox({ ...rows[0], has_password: true });
   });
 
 export const toggleMailbox = createServerFn({ method: "POST" })
@@ -798,4 +851,18 @@ export const listMailDns = createServerFn({ method: "GET" })
       result.push(await describeMailDns(sql, domain));
     }
     return result;
+  });
+
+export const checkMailDns = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ domain: z.string().min(3).max(120) }))
+  .handler(async ({ data }) => {
+    const domain = data.domain.trim().toLowerCase();
+    const ip = isVpsApply() ? publicIp() : "203.0.113.10";
+    const expected = mailDnsBlueprint(domain, ip).map((r) => ({
+      type: r.type,
+      name: r.name,
+      value: r.value,
+    }));
+    return checkMailDnsLive(domain, expected);
   });

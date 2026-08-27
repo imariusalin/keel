@@ -71,11 +71,11 @@ export async function upsertRecord(
 }
 
 /** A record for a site or app hostname, plus www when it is the apex. */
-export async function ensureHostDns(sql: Sql, fqdn: string): Promise<void> {
+export async function ensureHostDns(sql: Sql, fqdn: string, bindIp?: string): Promise<void> {
   const { zone, host } = zoneAndHost(fqdn);
   if (!zone) return;
   const z = await ensureZone(sql, zone);
-  const ip = isVpsApply() ? publicIp() : "203.0.113.10";
+  const ip = bindIp || (isVpsApply() ? publicIp() : "203.0.113.10");
   await upsertRecord(sql, z.id, "A", host, ip, 300, null);
   if (host === "@") {
     await upsertRecord(sql, z.id, "A", "www", ip, 300, null);

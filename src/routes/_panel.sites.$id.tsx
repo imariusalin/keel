@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
-import { ArrowLeft, FolderLock, User } from "lucide-react";
+import { ArrowLeft, FolderLock, FolderOpen, User } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -72,7 +72,15 @@ function SiteDetail() {
         title={site.domain}
         description={site.root}
         action={
-          <Badge variant={site.status === "active" ? "ok" : "warn"}>{site.status}</Badge>
+          <div className="flex items-center gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link to="/files" search={{ kind: "site", id: site.id }}>
+                <FolderOpen className="size-4" />
+                Files
+              </Link>
+            </Button>
+            <Badge variant={site.status === "active" ? "ok" : "warn"}>{site.status}</Badge>
+          </div>
         }
       />
 
@@ -215,6 +223,26 @@ function SiteDetail() {
                   onCheckedChange={(v) => void patch({ id: site.id, isolated: v })}
                 />
               </div>
+              {site.ipAddress ? (
+                <div className="flex items-start gap-3 text-sm">
+                  <FolderLock className="mt-0.5 size-4 text-muted-foreground" />
+                  <div>
+                    <p className="font-medium">Dedicated IP</p>
+                    <p className="font-mono text-xs text-muted-foreground">{site.ipAddress}</p>
+                    <Link to="/ips" className="mt-1 inline-flex text-xs text-primary hover:underline">
+                      Manage IPs
+                    </Link>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Uses the server primary IP.{" "}
+                  <Link to="/ips" className="text-foreground underline">
+                    Allocate a dedicated address
+                  </Link>
+                  .
+                </p>
+              )}
               <div className="flex items-start gap-3 text-sm">
                 <User className="mt-0.5 size-4 text-muted-foreground" />
                 <div>

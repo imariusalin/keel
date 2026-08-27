@@ -16,6 +16,25 @@ ok_user()   { [[ "$1" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; }
 ok_php()    { [[ "$1" =~ ^8\.[1-4]$ ]]; }
 ok_node()   { [[ "$1" =~ ^(18|20|22)$ ]]; }
 ok_port()   { [[ "$1" =~ ^[0-9]{1,5}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
+ok_ipv4()   { [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
+
+bind_http() {
+  ip="${1:-}"
+  if ok_ipv4 "$ip"; then
+    printf '%s:80' "$ip"
+  else
+    printf '80;\n    listen [::]:80'
+  fi
+}
+
+bind_https() {
+  ip="${1:-}"
+  if ok_ipv4 "$ip"; then
+    printf '%s:443 ssl http2' "$ip"
+  else
+    printf '443 ssl http2;\n    listen [::]:443 ssl http2'
+  fi
+}
 
 nologin_shell() { command -v nologin 2>/dev/null || echo /usr/sbin/nologin; }
 
@@ -103,6 +122,10 @@ apply_sites() {
     isolated="$(jq -r '.isolated' <<<"$site")"
     ssl="$(jq -r '.ssl' <<<"$site")"
     force="$(jq -r '.forceHttps // false' <<<"$site")"
+    ip="$(jq -r '.ip // empty' <<<"$site")"
+    ok_ipv4 "$ip" || ip=""
+    http_bind="$(bind_http "$ip")"
+    https_bind="$(bind_https "$ip")"
 
     [ "$status" = "active" ] || continue
     ok_domain "$domain" || { log "skip site, bad domain"; continue; }
@@ -139,15 +162,16 @@ apply_sites() {
     write_file "/etc/php/${php}/fpm/pool.d/keel-${pool}.conf" "$conf"
 
     if wants_ssl "$ssl" "$domain" && cert_live "$domain" && truthy "$force"; then
-      vhost="$(render "$TEMPLATES/nginx-site-force.conf" __DOMAIN__ "$domain")"
+      vhost="$(render "$TEMPLATES/nginx-site-force.conf" \
+        __DOMAIN__ "$domain" __BIND_80__ "$http_bind")"
     else
       vhost="$(render "$TEMPLATES/nginx-site.conf" \
-        __DOMAIN__ "$domain" __ROOT__ "$root" __SOCKET__ "$socket")"
+        __DOMAIN__ "$domain" __ROOT__ "$root" __SOCKET__ "$socket" __BIND_80__ "$http_bind")"
     fi
     write_file "/etc/nginx/keel.d/site-${domain}.conf" "$vhost"
     if wants_ssl "$ssl" "$domain" && cert_live "$domain"; then
       sslv="$(render "$TEMPLATES/nginx-site-ssl.conf" \
-        __DOMAIN__ "$domain" __ROOT__ "$root" __SOCKET__ "$socket")"
+        __DOMAIN__ "$domain" __ROOT__ "$root" __SOCKET__ "$socket" __BIND_443__ "$https_bind")"
       write_file "/etc/nginx/keel.d/site-${domain}-ssl.conf" "$sslv"
     else
       rm -f "/etc/nginx/keel.d/site-${domain}-ssl.conf"
@@ -183,6 +207,10 @@ apply_apps() {
     port="$(jq -r '.port' <<<"$app")"
     entry="$(jq -r '.entry' <<<"$app")"
     status="$(jq -r '.status' <<<"$app")"
+    ip="$(jq -r '.ip // empty' <<<"$app")"
+    ok_ipv4 "$ip" || ip=""
+    http_bind="$(bind_http "$ip")"
+    https_bind="$(bind_https "$ip")"
     slug="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//;s/-$//')"
     unit="keel-app-${slug}"
     user="ka_${slug:0:20}"
@@ -237,11 +265,13 @@ UNIT
       fi
     fi
 
-    vhost="$(render "$TEMPLATES/nginx-node.conf" __DOMAIN__ "$domain" __PORT__ "$port")"
+    vhost="$(render "$TEMPLATES/nginx-node.conf" \
+      __DOMAIN__ "$domain" __PORT__ "$port" __BIND_80__ "$http_bind")"
     write_file "/etc/nginx/keel-apps.d/app-${domain}.conf" "$vhost"
     if [[ ! "$domain" =~ \.(example|local|test)$ ]]; then
       if cert_live "$domain"; then
-        sslv="$(render "$TEMPLATES/nginx-node-ssl.conf" __DOMAIN__ "$domain" __PORT__ "$port")"
+        sslv="$(render "$TEMPLATES/nginx-node-ssl.conf" \
+          __DOMAIN__ "$domain" __PORT__ "$port" __BIND_443__ "$https_bind")"
         write_file "/etc/nginx/keel-apps.d/app-${domain}-ssl.conf" "$sslv"
       else
         rm -f "/etc/nginx/keel-apps.d/app-${domain}-ssl.conf"
@@ -294,17 +324,25 @@ apply_mail() {
   fi
   : >/var/lib/keel/mail/vmailbox
   : >/var/lib/keel/mail/vdomains
+  : >/var/lib/keel/mail/users
   while IFS= read -r box; do
     [ -n "$box" ] || continue
     addr="$(jq -r '.address' <<<"$box")"
     status="$(jq -r '.status' <<<"$box")"
+    hash="$(jq -r '.passwordHash // empty' <<<"$box")"
+    quota="$(jq -r '.quotaMb // 2048' <<<"$box")"
     [ "$status" = "active" ] || continue
     [[ "$addr" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$ ]] || continue
+    [[ "$quota" =~ ^[0-9]+$ ]] || quota=2048
     domain="${addr#*@}"
     localpart="${addr%@*}"
     printf '%s %s/\n' "$addr" "$domain/$localpart" >>/var/lib/keel/mail/vmailbox
     grep -qxF "$domain" /var/lib/keel/mail/vdomains 2>/dev/null || echo "$domain" >>/var/lib/keel/mail/vdomains
     mkdir -p "/var/mail/keel/${domain}/${localpart}"
+    if [[ "$hash" == \{SSHA512\}* ]]; then
+      printf '%s:%s:vmail:vmail::/var/mail/keel/%s/%s::userdb_quota_rule=*:storage=%sM\n' \
+        "$addr" "$hash" "$domain" "$localpart" "$quota" >>/var/lib/keel/mail/users
+    fi
     mkdir -p /var/lib/keel/dkim
     if [ ! -f "/var/lib/keel/dkim/${domain}.private" ] && command -v opendkim-genkey >/dev/null 2>&1; then
       opendkim-genkey -D /var/lib/keel/dkim -s mail -d "$domain" >/dev/null 2>&1 || true
@@ -324,7 +362,160 @@ apply_mail() {
   postconf -e "virtual_minimum_uid = 100"
   postconf -e "virtual_uid_maps = static:${vuid}"
   postconf -e "virtual_gid_maps = static:${vgid}"
+  if [ -d /etc/dovecot/conf.d ]; then
+    cat >/etc/dovecot/conf.d/99-keel.conf <<'DOVE'
+# Managed by keel-apply
+protocols = imap
+mail_location = maildir:/var/mail/keel/%d/%n
+mail_uid = vmail
+mail_gid = vmail
+first_valid_uid = 100
+passdb {
+  driver = passwd-file
+  args = scheme=SSHA512 username_format=%u /var/lib/keel/mail/users
+}
+userdb {
+  driver = passwd-file
+  args = username_format=%u /var/lib/keel/mail/users
+}
+ssl = yes
+disable_plaintext_auth = no
+auth_mechanisms = plain login
+DOVE
+    chmod 644 /etc/dovecot/conf.d/99-keel.conf
+    chmod 640 /var/lib/keel/mail/users
+    systemctl reload dovecot >/dev/null 2>&1 || systemctl restart dovecot >/dev/null 2>&1 || true
+  fi
   systemctl reload postfix >/dev/null 2>&1 || true
+}
+
+# --- cron ------------------------------------------------------------------
+apply_cron() {
+  [ "$DRY" -eq 1 ] && { log "would apply cron jobs"; return; }
+  dest=/etc/cron.d/keel-jobs
+  {
+    echo "SHELL=/bin/sh"
+    echo "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    echo "MAILTO="
+    while IFS= read -r job; do
+      [ -n "$job" ] || continue
+      enabled="$(jq -r '.enabled' <<<"$job")"
+      [ "$enabled" = "true" ] || [ "$enabled" = "t" ] || [ "$enabled" = "1" ] || continue
+      user="$(jq -r '.user' <<<"$job")"
+      sched="$(jq -r '.schedule' <<<"$job")"
+      cmd="$(jq -r '.command' <<<"$job")"
+      cwd="$(jq -r '.cwd // empty' <<<"$job")"
+      ok_user "$user" || continue
+      [[ "$sched" =~ ^[0-9*/,[:space:]-]+$ ]] || continue
+      [[ "$cmd" != *$'\n'* ]] || continue
+      [[ "$cmd" != *%* ]] || continue
+      if [ -n "$cwd" ] && [[ "$cwd" =~ ^/home/[a-z_][a-z0-9_-]{0,31}/(www|app)$ ]]; then
+        printf '%s %s cd %s && %s\n' "$sched" "$user" "$cwd" "$cmd"
+      else
+        printf '%s %s %s\n' "$sched" "$user" "$cmd"
+      fi
+    done < <(jq -c '.cron // [] | .[]' "$STATE")
+  } >"$dest"
+  chmod 644 "$dest"
+}
+
+# --- backups ---------------------------------------------------------------
+apply_backups() {
+  [ "$DRY" -eq 1 ] && { log "would apply backup cron"; return; }
+  dest=/etc/cron.d/keel-backups
+  {
+    echo "SHELL=/bin/sh"
+    echo "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    echo "MAILTO="
+    while IFS= read -r job; do
+      [ -n "$job" ] || continue
+      enabled="$(jq -r '.enabled' <<<"$job")"
+      [ "$enabled" = "true" ] || [ "$enabled" = "t" ] || [ "$enabled" = "1" ] || continue
+      id="$(jq -r '.id' <<<"$job")"
+      sched="$(jq -r '.schedule' <<<"$job")"
+      [[ "$id" =~ ^[0-9]+$ ]] || continue
+      [[ "$sched" =~ ^[0-9*/,[:space:]-]+$ ]] || continue
+      printf '%s root /usr/local/sbin/keel-backup run %s\n' "$sched" "$id"
+    done < <(jq -c '.backups // [] | .[]' "$STATE")
+  } >"$dest"
+  chmod 644 "$dest"
+  mkdir -p /var/lib/keel/backups
+  chown keel:keel /var/lib/keel/backups 2>/dev/null || true
+}
+
+# --- redis -----------------------------------------------------------------
+redis_unit() {
+  for u in redis-server redis; do
+    if systemctl cat "${u}.service" >/dev/null 2>&1; then
+      printf '%s' "$u"
+      return
+    fi
+  done
+  printf 'redis-server'
+}
+
+apply_redis() {
+  unit="$(redis_unit)"
+  if mod_on redis; then
+    if [ "$DRY" -eq 1 ]; then
+      log "would install/enable redis (${unit})"
+      return
+    fi
+    if ! command -v redis-server >/dev/null 2>&1; then
+      log "installing redis-server"
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -y >/dev/null
+      apt-get install -y --no-install-recommends redis-server \
+        || apt-get install -y --no-install-recommends redis
+      unit="$(redis_unit)"
+    fi
+    if [ -d /etc/redis ]; then
+      passfile=/var/lib/keel/redis.pass
+      if [ ! -s "$passfile" ]; then
+        umask 077
+        openssl rand -hex 24 >"$passfile"
+      fi
+      chown keel:keel "$passfile" 2>/dev/null || true
+      chmod 600 "$passfile"
+      rpass="$(tr -d '\n' <"$passfile")"
+      [[ "$rpass" =~ ^[a-f0-9]{32,64}$ ]] || die "bad redis password file"
+      cat >/etc/redis/keel.conf <<EOF
+# Managed by keel-apply — localhost only. Package is never removed on disable.
+bind 127.0.0.1
+protected-mode yes
+port 6379
+supervised systemd
+requirepass ${rpass}
+rename-command FLUSHALL ""
+rename-command FLUSHDB ""
+rename-command CONFIG ""
+EOF
+      if id -u redis >/dev/null 2>&1; then
+        chown root:redis /etc/redis/keel.conf
+      else
+        chown root:root /etc/redis/keel.conf
+      fi
+      chmod 640 /etc/redis/keel.conf
+      if [ -f /etc/redis/redis.conf ] && ! grep -q '/etc/redis/keel.conf' /etc/redis/redis.conf; then
+        printf '\ninclude /etc/redis/keel.conf\n' >>/etc/redis/redis.conf
+      fi
+    fi
+    log "redis on — enable and start ${unit} (starts at boot)"
+    systemctl unmask "$unit" >/dev/null 2>&1 || true
+    systemctl enable "$unit"
+    systemctl restart "$unit" || systemctl start "$unit"
+  else
+    if [ "$DRY" -eq 1 ]; then
+      log "would stop redis (keep package, do not start at boot)"
+      return
+    fi
+    # Never uninstall. Stop now and disable so a reboot does not bring it back.
+    if systemctl cat redis-server.service >/dev/null 2>&1 || systemctl cat redis.service >/dev/null 2>&1; then
+      log "redis off — stop ${unit}, disable boot start (package stays)"
+      systemctl disable --now redis-server >/dev/null 2>&1 || true
+      systemctl disable --now redis >/dev/null 2>&1 || true
+    fi
+  fi
 }
 
 # --- dns -------------------------------------------------------------------
@@ -441,6 +632,9 @@ apply_apps
 apply_firewall
 apply_mail
 apply_dns
+apply_cron
+apply_backups
+apply_redis
 
 if [ "$DRY" -eq 0 ]; then
   mkdir -p "$ACME_ROOT/.well-known/acme-challenge"

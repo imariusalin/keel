@@ -1,2 +1,5 @@
 keel ALL=(root) NOPASSWD: /usr/local/sbin/keel-apply
 keel ALL=(root) NOPASSWD: /usr/local/sbin/keel
+keel ALL=(root) NOPASSWD: /usr/local/sbin/keel-files
+keel ALL=(root) NOPASSWD: /usr/local/sbin/keel-backup run *
+keel ALL=(root) NOPASSWD: /usr/local/sbin/keel-backup cron

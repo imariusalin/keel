@@ -106,6 +106,11 @@ function SitesPage() {
                     <Badge variant="outline">PHP {site.phpVersion}</Badge>
                     {site.isolated ? <Badge variant="ok">isolated</Badge> : null}
                     {site.ssl ? <Badge variant="default">tls</Badge> : null}
+                    {site.ipAddress ? (
+                      <Badge variant="outline" className="font-mono">
+                        {site.ipAddress}
+                      </Badge>
+                    ) : null}
                     <Badge variant={site.status === "active" ? "ok" : "warn"}>
                       {site.status}
                     </Badge>
