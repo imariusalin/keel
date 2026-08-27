@@ -103,26 +103,63 @@ const LOCAL_DEV_ORIGINS: string[] = [
   "http://127.0.0.1:8080",
   "http://[::1]:8080",
 ];
+
+/** Public origins this VPS panel is opened at (IP and hostname, http/https). */
+function vpsPublicOrigins(): string[] {
+  const out: string[] = [];
+  const add = (raw: string | undefined) => {
+    const v = raw?.trim().replace(/\/+$/, "");
+    if (!v) return;
+    if (v.startsWith("http://") || v.startsWith("https://")) {
+      out.push(v);
+      return;
+    }
+    out.push(`http://${v}`, `https://${v}`);
+  };
+  add(env("BETTER_AUTH_URL"));
+  add(env("KEEL_PUBLIC_IP"));
+  add(env("KEEL_HOSTNAME"));
+  return [...new Set(out)];
+}
+
+const vpsOrigins = vpsPublicOrigins();
+const vpsMode = env("KEEL_VPS") === "1" || env("KEEL_APPLY") === "1";
+const explicitHttps = (explicitBaseURL ?? "").startsWith("https:");
+// `__Host-` + Secure cookies only work on HTTPS or localhost. A VPS opened at
+// http://1.2.3.4 must use a normal cookie or the browser drops the session.
+const vpsHttpCookies = vpsMode && !explicitHttps;
+
+const extraHosts = [env("KEEL_PUBLIC_IP"), env("KEEL_HOSTNAME")].filter(
+  (h): h is string => Boolean(h),
+);
+
 const baseURL = explicitBaseURL ?? {
   // Include loopback hosts so dynamic baseURL resolves for local email/password
   // (not only the preview wildcard).
-  allowedHosts: [...previewAllowedHosts, "localhost", "127.0.0.1", "[::1]"],
+  allowedHosts: [
+    ...previewAllowedHosts,
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+    ...extraHosts,
+  ],
   // `auto` → trust both http:// and https:// expansions of allowedHosts
   // (preview is https; local dev is http).
   protocol: "auto" as const,
-  fallback: "http://localhost:8080",
+  fallback: vpsOrigins[0] ?? "http://localhost:8080",
 };
 
 // Origins Better Auth accepts on credentialed POSTs (sign-up/sign-in, etc.).
 // Missing entries here surface as FORBIDDEN "Invalid origin".
 const trustedOrigins: string[] = explicitBaseURL
-  ? [explicitBaseURL, ...LOCAL_DEV_ORIGINS]
+  ? [explicitBaseURL.replace(/\/+$/, ""), ...LOCAL_DEV_ORIGINS, ...vpsOrigins]
   : [
       // Host wildcards (matched against Origin's host)
       ...previewAllowedHosts,
       // Full-origin wildcards (matched against Origin)
       ...previewAllowedHosts.flatMap((host) => [`https://${host}`, `http://${host}`]),
       ...LOCAL_DEV_ORIGINS,
+      ...vpsOrigins,
     ];
 
 const databaseUrl = env("DATABASE_URL");
@@ -146,7 +183,9 @@ const database = databaseUrl
   : { dialect: pgliteDialect(() => getPglite()), type: "postgres" as const };
 
 /** Session token cookie name — also read by the live-preview popup completion page. */
-export const SESSION_TOKEN_COOKIE = "__Host-grok-auth.session_token";
+export const SESSION_TOKEN_COOKIE = vpsHttpCookies
+  ? "keel.session_token"
+  : "__Host-grok-auth.session_token";
 
 // Built separately so the `betterAuth({...})` call stays easy to edit without
 // breaking brackets (models often trip on the conditional plugin spread).
@@ -222,13 +261,22 @@ export const auth = betterAuth({
   // `http://localhost`, so local dev still works.)
   advanced: {
     useSecureCookies: false,
-    defaultCookieAttributes: { secure: true, sameSite: "lax", path: "/" },
-    cookies: {
-      session_token: { name: SESSION_TOKEN_COOKIE },
-      session_data: { name: "__Host-grok-auth.session_data" },
-      account_data: { name: "__Host-grok-auth.account_data" },
-      dont_remember: { name: "__Host-grok-auth.dont_remember" },
-    },
+    defaultCookieAttributes: vpsHttpCookies
+      ? { secure: false, sameSite: "lax", path: "/" }
+      : { secure: true, sameSite: "lax", path: "/" },
+    cookies: vpsHttpCookies
+      ? {
+          session_token: { name: "keel.session_token" },
+          session_data: { name: "keel.session_data" },
+          account_data: { name: "keel.account_data" },
+          dont_remember: { name: "keel.dont_remember" },
+        }
+      : {
+          session_token: { name: SESSION_TOKEN_COOKIE },
+          session_data: { name: "__Host-grok-auth.session_data" },
+          account_data: { name: "__Host-grok-auth.account_data" },
+          dont_remember: { name: "__Host-grok-auth.dont_remember" },
+        },
   },
 
   plugins: [

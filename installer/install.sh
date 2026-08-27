@@ -184,12 +184,20 @@ case "$ADMIN_HOST" in *.*) ;; *) ADMIN_HOST="${ADMIN_HOST}.local" ;; esac
 ADMIN_EMAIL="admin@${ADMIN_HOST}"
 ADMIN_PASS="$(openssl rand -hex 8)"
 umask 077
+if [ ! -f /var/lib/keel/auth.secret ]; then
+  openssl rand -hex 32 > /var/lib/keel/auth.secret
+  chown keel:keel /var/lib/keel/auth.secret
+  chmod 600 /var/lib/keel/auth.secret
+fi
+AUTH_SECRET="$(tr -d '[:space:]' </var/lib/keel/auth.secret)"
 cat > /var/lib/keel/bootstrap-admin.json <<JSON
 {"email":"${ADMIN_EMAIL}","password":"${ADMIN_PASS}","name":"Admin"}
 JSON
 cat > /var/lib/keel/admin.env <<ENV
 KEEL_ADMIN_EMAIL=${ADMIN_EMAIL}
 KEEL_ADMIN_PASSWORD=${ADMIN_PASS}
+BETTER_AUTH_SECRET=${AUTH_SECRET}
+BETTER_AUTH_URL=http://127.0.0.1
 ENV
 cat > /var/lib/keel/credentials <<ENV
 url=http://__IP__/
@@ -269,6 +277,13 @@ else
   EXEC="/usr/bin/node /opt/keel/node_modules/vite/bin/vite.js preview --host 127.0.0.1 --port ${PANEL_PORT}"
 fi
 PUBLIC_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+if [ -n "$PUBLIC_IP" ]; then
+  if grep -q '^BETTER_AUTH_URL=' /var/lib/keel/admin.env 2>/dev/null; then
+    sed -i "s|^BETTER_AUTH_URL=.*|BETTER_AUTH_URL=http://${PUBLIC_IP}|" /var/lib/keel/admin.env
+  else
+    printf 'BETTER_AUTH_URL=http://%s\n' "$PUBLIC_IP" >> /var/lib/keel/admin.env
+  fi
+fi
 sed \
   -e "s/PORT=9090/PORT=${PANEL_PORT}/" \
   -e "s/NITRO_PORT=9090/NITRO_PORT=${PANEL_PORT}/" \
