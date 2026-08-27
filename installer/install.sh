@@ -121,14 +121,17 @@ else
   npm install --no-audit --no-fund
 fi
 npm run build
-# PGlite wasm/data must sit next to the nitro server bundle.
+# PGlite wasm/data must sit next to the bundled module (usually _libs/).
+node scripts/copy-pglite-assets.mjs
+# Keep a hard fallback if the helper is missing on an older checkout.
 if [ -d /opt/keel/.output/server ]; then
   PGLITE_DIST="$(find /opt/keel/node_modules/@electric-sql/pglite -type d -name dist 2>/dev/null | head -1 || true)"
-  if [ -n "$PGLITE_DIST" ]; then
-    mkdir -p /opt/keel/.output/server/chunks
+  if [ -n "$PGLITE_DIST" ] && [ -f "$PGLITE_DIST/pglite.data" ]; then
+    mkdir -p /opt/keel/.output/server/_libs /opt/keel/.output/server/chunks
     for f in pglite.wasm pglite.data initdb.wasm initdb.js; do
       if [ -f "$PGLITE_DIST/$f" ]; then
         cp -a "$PGLITE_DIST/$f" /opt/keel/.output/server/
+        cp -a "$PGLITE_DIST/$f" /opt/keel/.output/server/_libs/
         cp -a "$PGLITE_DIST/$f" /opt/keel/.output/server/chunks/ || true
       fi
     done
