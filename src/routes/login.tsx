@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { authClient } from "@/lib/auth/client";
+import { loginEmails } from "@/lib/panel/admin-id";
 import { adminStatus, getPanelState } from "@/lib/panel/server";
 
 export const Route = createFileRoute("/login")({
@@ -19,43 +20,44 @@ export const Route = createFileRoute("/login")({
 function LoginPage() {
   const data = Route.useLoaderData();
   const navigate = useNavigate();
-  const [email, setEmail] = useState(data.hasAdmin ? "" : "admin");
+  const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const firstRun = !data.hasAdmin;
 
-  function resolveEmail(raw: string) {
-    const value = raw.trim().toLowerCase();
-    if (!value) return "";
-    if (value.includes("@")) return value;
-    const host = data.hostname.includes(".") ? data.hostname : `${data.hostname}.local`;
-    return `${value}@${host}`;
-  }
-
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    const resolved = resolveEmail(email);
-    if (!resolved || password.length < 8) {
-      toast.error("Use an email (or admin) and a password of 8+ characters.");
+    const candidates = loginEmails(username, data.hostname);
+    if (candidates.length === 0 || password.length < 8) {
+      toast.error("Username admin and a password of 8+ characters.");
       return;
     }
     setBusy(true);
     try {
       if (firstRun) {
         const { error } = await authClient.signUp.email({
-          email: resolved,
+          email: candidates[0],
           password,
           name: "Admin",
           callbackURL: "/",
         });
         if (error) throw new Error(error.message || "Could not create admin");
       } else {
-        const { error } = await authClient.signIn.email({
-          email: resolved,
-          password,
-          callbackURL: "/",
-        });
-        if (error) throw new Error(error.message || "Wrong email or password");
+        let last = "Wrong username or password";
+        let ok = false;
+        for (const email of candidates) {
+          const { error } = await authClient.signIn.email({
+            email,
+            password,
+            callbackURL: "/",
+          });
+          if (!error) {
+            ok = true;
+            break;
+          }
+          last = error.message || last;
+        }
+        if (!ok) throw new Error(last);
       }
       toast.success(firstRun ? "Admin account created" : "Welcome back");
       await navigate({ to: "/" });
@@ -72,21 +74,19 @@ function LoginPage() {
           <KeelMark className="size-8" />
           <span className="text-lg font-semibold tracking-tight">Keel</span>
         </div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {firstRun ? "Create the admin account" : "Sign in"}
-        </h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           {firstRun
-            ? "This box has no admin yet. Pick an email and a password. Store the password somewhere safe."
+            ? "First login. Username is admin — set a password of 8+ characters."
             : `Panel on ${data.hostname}`}
         </p>
         <form className="mt-8 grid gap-4" onSubmit={(e) => void onSubmit(e)}>
           <div className="grid gap-2">
-            <Label htmlFor="email">Email or username</Label>
+            <Label htmlFor="username">Username</Label>
             <Input
-              id="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              id="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
               spellCheck={false}
               placeholder="admin"
@@ -104,7 +104,7 @@ function LoginPage() {
             />
           </div>
           <Button type="submit" disabled={busy}>
-            {busy ? "Please wait…" : firstRun ? "Create admin" : "Sign in"}
+            {busy ? "Please wait…" : "Sign in"}
           </Button>
         </form>
       </div>

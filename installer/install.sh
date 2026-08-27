@@ -100,7 +100,7 @@ LOGO
     . /var/lib/keel/credentials
     printf '   Keel is ready.\n\n'
     printf '   URL      %s\n' "${url:-http://server/}"
-    printf '   Email    %s\n' "${email:-admin}"
+    printf '   Username %s\n' "${user:-${email:-admin}}"
     printf '   Password %s\n\n' "${password:-}"
     printf '   Saved at /var/lib/keel/credentials  (root only)\n\n'
   else
@@ -179,9 +179,7 @@ install -d -m 0750 -o keel -g keel /var/lib/keel /var/lib/keel/pglite /var/lib/k
 install -d -m 0755 /opt/keel /etc/nginx/keel.d /etc/nginx/keel-apps.d
 install -d -m 0750 -o vmail -g vmail /var/mail/keel
 
-ADMIN_HOST="$HOSTNAME_FQDN"
-case "$ADMIN_HOST" in *.*) ;; *) ADMIN_HOST="${ADMIN_HOST}.local" ;; esac
-ADMIN_EMAIL="admin@${ADMIN_HOST}"
+ADMIN_EMAIL="admin@keel.local"
 ADMIN_PASS="$(openssl rand -hex 8)"
 umask 077
 if [ ! -f /var/lib/keel/auth.secret ]; then
@@ -201,7 +199,7 @@ BETTER_AUTH_URL=http://127.0.0.1
 ENV
 cat > /var/lib/keel/credentials <<ENV
 url=http://__IP__/
-email=${ADMIN_EMAIL}
+user=admin
 password=${ADMIN_PASS}
 ENV
 chown keel:keel /var/lib/keel/bootstrap-admin.json /var/lib/keel/admin.env

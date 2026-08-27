@@ -5,6 +5,7 @@ import { getSql, type Sql } from "@/lib/db";
 import { normalizeDomain, systemUserFromDomain } from "@/lib/utils";
 import { applyAfterChange, isVpsApply, publicIp, readHostMetrics } from "./apply";
 import { bootstrapAdminIfNeeded, hasAdminUser } from "./bootstrap-admin";
+import { displayUsername, toAuthEmail } from "./admin-id";
 import { describeMailDns, ensureHostDns, ensureMailDns, mailboxDomain } from "./dns-auto";
 import {
   mapActivity,
@@ -709,6 +710,35 @@ export const updateSettings = createServerFn({ method: "POST" })
     `;
     await applyAfterChange(sql);
     return readSettings(sql);
+  });
+
+export const getAdminIdentity = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const sql = await getSql();
+    const rows = await sql<{ email: string }>`
+      select email from "user" where id = ${context.userId}
+    `;
+    const email = rows[0]?.email ?? "admin@keel.local";
+    return { username: displayUsername(email), email };
+  });
+
+export const updateAdminIdentity = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator(z.object({ username: z.string().min(1).max(120) }))
+  .handler(async ({ data, context }) => {
+    const email = toAuthEmail(data.username);
+    const name = displayUsername(email);
+    const sql = await getSql();
+    await sql`
+      update "user" set email = ${email}, name = ${name} where id = ${context.userId}
+    `;
+    await sql`
+      update "account"
+      set "accountId" = ${email}
+      where "userId" = ${context.userId} and "providerId" = 'credential'
+    `;
+    return { username: name, email };
   });
 
 export const listMailDns = createServerFn({ method: "GET" })

@@ -7,19 +7,23 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { getPanelState, updateSettings } from "@/lib/panel/server";
+import { getAdminIdentity, getPanelState, updateAdminIdentity, updateSettings } from "@/lib/panel/server";
 import { NODE_VERSIONS, PHP_VERSIONS } from "@/lib/panel/types";
 
 export const Route = createFileRoute("/_panel/settings")({
-  loader: () => getPanelState(),
+  loader: async () => {
+    const [state, admin] = await Promise.all([getPanelState(), getAdminIdentity()]);
+    return { ...state, admin };
+  },
   component: SettingsPage,
 });
 
 function SettingsPage() {
-  const { settings } = Route.useLoaderData();
+  const { settings, admin } = Route.useLoaderData();
   const router = useRouter();
   const [hostname, setHostname] = useState(settings.hostname);
   const [sshPort, setSshPort] = useState(String(settings.sshPort));
+  const [username, setUsername] = useState(admin.username);
   const [busy, setBusy] = useState(false);
 
   async function saveIdentity() {
@@ -70,6 +74,48 @@ function SettingsPage() {
             </div>
             <Button onClick={() => void saveIdentity()} disabled={busy} className="w-fit">
               {busy ? "Saving…" : "Save"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Admin login</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="admin-user">Username</Label>
+              <Input
+                id="admin-user"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+                spellCheck={false}
+              />
+              <p className="text-xs text-muted-foreground">
+                Default is admin. Set an email here only if you want to log in with one.
+              </p>
+            </div>
+            <Button
+              onClick={() =>
+                void (async () => {
+                  setBusy(true);
+                  try {
+                    const next = await updateAdminIdentity({ data: { username } });
+                    setUsername(next.username);
+                    toast.success("Login name saved");
+                    await router.invalidate();
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : "Could not save");
+                  } finally {
+                    setBusy(false);
+                  }
+                })()
+              }
+              disabled={busy || !username.trim()}
+              className="w-fit"
+            >
+              {busy ? "Saving…" : "Save login"}
             </Button>
           </CardContent>
         </Card>
