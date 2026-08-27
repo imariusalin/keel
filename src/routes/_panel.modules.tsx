@@ -1,0 +1,60 @@
+import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { toast } from "sonner";
+import { PageHeader } from "@/components/page-header";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { listModules, toggleModule } from "@/lib/panel/server";
+
+export const Route = createFileRoute("/_panel/modules")({
+  loader: () => listModules(),
+  component: ModulesPage,
+});
+
+function ModulesPage() {
+  const modules = Route.useLoaderData();
+  const router = useRouter();
+  const coming = new Set(["backups", "redis"]);
+
+  return (
+    <div>
+      <PageHeader
+        kicker="Extend"
+        title="Modules"
+        description="Keel stays small. Enable only what this server needs. New packs drop in without a reinstall."
+      />
+      <div className="grid gap-3 sm:grid-cols-2">
+        {modules.map((mod) => (
+          <Card key={mod.id}>
+            <CardContent className="flex items-start justify-between gap-4 p-5">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-medium">{mod.name}</h2>
+                  <Badge variant="outline">v{mod.version}</Badge>
+                  {mod.core ? <Badge>core</Badge> : null}
+                  {coming.has(mod.slug) ? <Badge variant="warn">next pack</Badge> : null}
+                </div>
+                <p className="mt-2 text-sm text-muted-foreground">{mod.description}</p>
+              </div>
+              <Switch
+                checked={mod.enabled}
+                onCheckedChange={(v) =>
+                  void toggleModule({ data: { id: mod.id, enabled: v } })
+                    .then(() => {
+                      if (coming.has(mod.slug) && v) {
+                        toast.message("Enabled — management UI ships in the next pack");
+                      }
+                      return router.invalidate();
+                    })
+                    .catch((err: unknown) =>
+                      toast.error(err instanceof Error ? err.message : "Failed"),
+                    )
+                }
+              />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,19 @@
+[Unit]
+Description=Keel Node app %i
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=/home/%i/app
+Environment=NODE_ENV=production
+EnvironmentFile=-/var/lib/keel/apps/%i.env
+ExecStart=/usr/local/bin/node /home/%i/app/__ENTRY__
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

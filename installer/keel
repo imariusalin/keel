@@ -1,0 +1,53 @@
+#!/bin/bash
+# keel — operator CLI
+set -euo pipefail
+VERSION="$(cat /usr/local/share/keel/VERSION 2>/dev/null || echo 0.1.0)"
+
+usage() {
+  cat <<EOF
+keel ${VERSION}
+  apply [--dry-run]   write nginx, PHP-FPM, firewall, mail, DNS from panel state
+  doctor              check nginx, PHP, disk, firewall
+  status              panel + stack units
+  version
+EOF
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  apply)
+    exec /usr/local/sbin/keel-apply "${2:-}"
+    ;;
+  version|-v|--version)
+    echo "keel ${VERSION}"
+    ;;
+  status)
+    systemctl is-active --quiet keel-panel && echo "panel: running" || echo "panel: down"
+    systemctl is-active --quiet nginx && echo "nginx: running" || echo "nginx: down"
+    ufw status | head -1 || true
+    ;;
+  doctor)
+    echo "-- nginx"
+    nginx -t
+    echo "-- php-fpm"
+    for v in 8.1 8.2 8.3 8.4; do
+      if systemctl list-unit-files "php${v}-fpm.service" >/dev/null 2>&1; then
+        printf '  php%s-fpm %s\n' "$v" "$(systemctl is-active php${v}-fpm 2>/dev/null || echo missing)"
+      fi
+    done
+    echo "-- disk"
+    df -h / /var /home 2>/dev/null | awk 'NR==1 || /\/$|\/var|\/home/'
+    echo "-- firewall"
+    ufw status verbose | head -20
+    echo "-- state"
+    [ -f /var/lib/keel/state.json ] && jq '{hostname:.settings.hostname, sites:(.sites|length), apps:(.apps|length)}' /var/lib/keel/state.json
+    ;;
+  ""|-h|--help)
+    usage
+    ;;
+  *)
+    echo "unknown command: $cmd" >&2
+    usage >&2
+    exit 1
+    ;;
+esac

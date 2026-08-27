@@ -1,0 +1,205 @@
+import { createFileRoute, Link, useNavigate, useRouter } from "@tanstack/react-router";
+import { ArrowLeft, FolderLock, User } from "lucide-react";
+import { toast } from "sonner";
+import { PageHeader } from "@/components/page-header";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { deleteSite, getSite, updateSite } from "@/lib/panel/server";
+import { PHP_VERSIONS } from "@/lib/panel/types";
+
+export const Route = createFileRoute("/_panel/sites/$id")({
+  loader: async ({ params }) => {
+    const site = await getSite({ data: { id: Number(params.id) } });
+    if (!site) throw new Error("Site not found");
+    return site;
+  },
+  component: SiteDetail,
+});
+
+function SiteDetail() {
+  const site = Route.useLoaderData();
+  const router = useRouter();
+  const navigate = useNavigate();
+
+  async function patch(data: {
+    id: number;
+    phpVersion?: string;
+    memoryLimit?: string;
+    isolated?: boolean;
+    ssl?: boolean;
+    forceHttps?: boolean;
+    status?: "active" | "stopped";
+  }) {
+    try {
+      await updateSite({ data });
+      await router.invalidate();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Update failed");
+    }
+  }
+
+  async function onDelete() {
+    try {
+      await deleteSite({ data: { id: site.id } });
+      toast.success("Site removed");
+      await navigate({ to: "/sites" });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not remove site");
+    }
+  }
+
+  return (
+    <div>
+      <Link
+        to="/sites"
+        className="mb-4 inline-flex h-11 items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="size-4" />
+        Sites
+      </Link>
+      <PageHeader
+        kicker="Site"
+        title={site.domain}
+        description={site.root}
+        action={
+          <Badge variant={site.status === "active" ? "ok" : "warn"}>{site.status}</Badge>
+        }
+      />
+
+      <div className="grid gap-3 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle>PHP runtime</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-5">
+            <div className="grid gap-2">
+              <Label>Version</Label>
+              <Select
+                value={site.phpVersion}
+                onValueChange={(v) => void patch({ id: site.id, phpVersion: v })}
+              >
+                <SelectTrigger className="max-w-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PHP_VERSIONS.map((v) => (
+                    <SelectItem key={v} value={v}>
+                      PHP {v}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Reloads only this site’s FPM pool. Neighbours stay on their version.
+              </p>
+            </div>
+            <div className="grid gap-2">
+              <Label>Memory limit</Label>
+              <Select
+                value={site.memoryLimit}
+                onValueChange={(v) => void patch({ id: site.id, memoryLimit: v })}
+              >
+                <SelectTrigger className="max-w-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {["128M", "256M", "512M", "1024M"].map((v) => (
+                    <SelectItem key={v} value={v}>
+                      {v}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center justify-between rounded-lg bg-secondary px-3 py-3">
+              <p className="text-sm font-medium">TLS</p>
+              <Switch
+                checked={site.ssl}
+                onCheckedChange={(v) => void patch({ id: site.id, ssl: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-lg bg-secondary px-3 py-3">
+              <p className="text-sm font-medium">Force HTTPS</p>
+              <Switch
+                checked={site.forceHttps}
+                onCheckedChange={(v) => void patch({ id: site.id, forceHttps: v })}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-lg bg-secondary px-3 py-3">
+              <p className="text-sm font-medium">Site running</p>
+              <Switch
+                checked={site.status === "active"}
+                onCheckedChange={(v) =>
+                  void patch({ id: site.id, status: v ? "active" : "stopped" })
+                }
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-3">
+          <Card>
+            <CardHeader>
+              <CardTitle>Isolation</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              <div className="flex items-center justify-between rounded-lg bg-secondary px-3 py-3">
+                <p className="text-sm font-medium">Jail this site</p>
+                <Switch
+                  checked={site.isolated}
+                  onCheckedChange={(v) => void patch({ id: site.id, isolated: v })}
+                />
+              </div>
+              <div className="flex items-start gap-3 text-sm">
+                <User className="mt-0.5 size-4 text-muted-foreground" />
+                <div>
+                  <p className="font-medium">System user</p>
+                  <p className="font-mono text-xs text-muted-foreground">
+                    {site.systemUser}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-start gap-3 text-sm">
+                <FolderLock className="mt-0.5 size-4 text-muted-foreground" />
+                <div>
+                  <p className="font-medium">Pool + open_basedir</p>
+                  <p className="font-mono text-xs text-muted-foreground">{site.pool}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Cannot read other homes. No shared tmp. Process user matches the
+                    files.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-5">
+              <p className="text-sm font-medium">Remove site</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Drops the vhost, pool, and jail. Files stay until you empty the
+                home directory on the box.
+              </p>
+              <Button
+                variant="destructive"
+                className="mt-4"
+                onClick={() => void onDelete()}
+              >
+                Remove site
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}

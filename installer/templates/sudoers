@@ -1,0 +1,2 @@
+keel ALL=(root) NOPASSWD: /usr/local/sbin/keel-apply
+keel ALL=(root) NOPASSWD: /usr/local/sbin/keel
