@@ -188,9 +188,9 @@ function BackupsPage() {
   return (
     <div>
       <PageHeader
-        kicker="Protect"
+        kicker="Security"
         title="Backups"
-        description="Every run writes a tar.gz on this box. Turn on rsync, S3 (or R2/MinIO), or both — the same archive is pushed to every destination that’s on."
+        description="Every run writes a tar.gz on this server. Turn on rsync, S3 (or R2/MinIO), or both — the same archive is pushed to every destination that’s on."
         action={
           <Button
             onClick={() => {

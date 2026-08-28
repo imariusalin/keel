@@ -123,7 +123,7 @@ function Overview() {
                       <p className="truncate text-sm font-medium">{site.domain}</p>
                       <p className="font-mono text-xs text-muted-foreground">
                         PHP {site.phpVersion}
-                        {site.isolated ? " · jail" : ""}
+                        {site.isolated ? " · isolated" : ""}
                       </p>
                     </div>
                     <Badge variant={site.status === "active" ? "ok" : "default"}>
@@ -141,10 +141,10 @@ function Overview() {
             <CardContent className="flex items-start gap-3 p-5">
               <Lock className="mt-0.5 size-4 text-muted-foreground" />
               <div>
-                <p className="text-sm font-medium">Segregation</p>
+                <p className="text-sm font-medium">Account isolation</p>
                 <p className="mt-1 text-sm text-muted-foreground">
                   {data.settings.isolation
-                    ? `${isolated} of ${data.counts.sites} sites in their own user, pool, and jail.`
+                    ? `${isolated} of ${data.counts.sites} sites have their own system user and PHP-FPM pool.`
                     : "Isolation is off. Turn it on in Settings."}
                 </p>
               </div>

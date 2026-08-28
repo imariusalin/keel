@@ -70,7 +70,7 @@ export function joinJail(rootAbs: string, rel: string): string {
   const parts = splitRel(rel);
   const root = path.resolve(rootAbs);
   const resolved = path.resolve(root, ...parts);
-  if (!isInside(root, resolved)) throw new Error("Path escapes jail");
+  if (!isInside(root, resolved)) throw new Error("That path is outside this account");
   return resolved;
 }
 
@@ -143,7 +143,7 @@ async function entryFromStat(
 }
 
 async function assertSafeFile(jail: string, abs: string): Promise<void> {
-  if (!isInside(jail, abs)) throw new Error("Path escapes jail");
+  if (!isInside(jail, abs)) throw new Error("That path is outside this account");
   const fsp = await fs();
   let st;
   try {
@@ -155,7 +155,7 @@ async function assertSafeFile(jail: string, abs: string): Promise<void> {
   }
   if (st.isSymbolicLink()) {
     const real = await fsp.realpath(abs);
-    if (!isInside(jail, real)) throw new Error("Symlink leaves the jail");
+    if (!isInside(jail, real)) throw new Error("This link points outside the account");
   }
 }
 
@@ -250,7 +250,7 @@ export async function localWrite(
   const fsp = await fs();
   const abs = joinJail(jail, rel);
   const parent = path.dirname(abs);
-  if (!isInside(jail, parent)) throw new Error("Path escapes jail");
+  if (!isInside(jail, parent)) throw new Error("That path is outside this account");
   await assertSafeFile(jail, parent);
   const buf =
     encoding === "base64" ? Buffer.from(content, "base64") : Buffer.from(content, "utf8");
@@ -283,18 +283,18 @@ export async function localRename(
   rel: string,
   toRel: string,
 ): Promise<{ path: string }> {
-  if (virtNormalize(rel) === "/") throw new Error("Cannot rename the jail root");
+  if (virtNormalize(rel) === "/") throw new Error("Cannot rename the home directory");
   const fsp = await fs();
   const src = joinJail(jail, rel);
   const dest = joinJail(jail, toRel);
   await assertSafeFile(jail, src);
-  if (!isInside(jail, path.dirname(dest))) throw new Error("Path escapes jail");
+  if (!isInside(jail, path.dirname(dest))) throw new Error("That path is outside this account");
   await fsp.rename(src, dest);
   return { path: virtNormalize(toRel) };
 }
 
 export async function localDelete(jail: string, rel: string): Promise<{ ok: true }> {
-  if (virtNormalize(rel) === "/") throw new Error("Cannot delete the jail root");
+  if (virtNormalize(rel) === "/") throw new Error("Cannot delete the home directory");
   const fsp = await fs();
   const abs = joinJail(jail, rel);
   await assertSafeFile(jail, abs);
@@ -324,7 +324,7 @@ export async function localCopy(
   const src = joinJail(jail, rel);
   const dest = joinJail(jail, toRel);
   await assertSafeFile(jail, src);
-  if (!isInside(jail, path.dirname(dest))) throw new Error("Path escapes jail");
+  if (!isInside(jail, path.dirname(dest))) throw new Error("That path is outside this account");
   await fsp.cp(src, dest, { recursive: true, errorOnExist: true, force: false });
   return { path: virtNormalize(toRel) };
 }

@@ -108,7 +108,7 @@ function SiteDetail() {
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Reloads only this site’s FPM pool. Neighbours stay on their version.
+                Reloads only this site’s PHP-FPM pool. Other sites keep their version.
               </p>
             </div>
             <div className="grid gap-2">
@@ -217,7 +217,7 @@ function SiteDetail() {
             </CardHeader>
             <CardContent className="grid gap-3">
               <div className="flex items-center justify-between rounded-lg bg-secondary px-3 py-3">
-                <p className="text-sm font-medium">Jail this site</p>
+                <p className="text-sm font-medium">Isolate this site</p>
                 <Switch
                   checked={site.isolated}
                   onCheckedChange={(v) => void patch({ id: site.id, isolated: v })}
@@ -255,11 +255,11 @@ function SiteDetail() {
               <div className="flex items-start gap-3 text-sm">
                 <FolderLock className="mt-0.5 size-4 text-muted-foreground" />
                 <div>
-                  <p className="font-medium">Pool + open_basedir</p>
+                  <p className="font-medium">PHP-FPM pool</p>
                   <p className="font-mono text-xs text-muted-foreground">{site.pool}</p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Cannot read other homes. No shared tmp. Process user matches the
-                    files.
+                    Cannot read other home directories. Process user matches the
+                    files on disk.
                   </p>
                 </div>
               </div>
@@ -269,8 +269,8 @@ function SiteDetail() {
             <CardContent className="p-5">
               <p className="text-sm font-medium">Remove site</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Drops the vhost, pool, and jail. Files stay until you empty the
-                home directory on the box.
+                Removes the vhost, PHP-FPM pool, and system user. Files stay until
+                you empty the home directory on the server.
               </p>
               <Button
                 variant="destructive"

@@ -46,7 +46,7 @@ function SettingsPage() {
       <PageHeader
         kicker="Server"
         title="Settings"
-        description="Identity, isolation defaults, and the runtimes this box already has."
+        description="Identity, isolation defaults, and the runtimes this server already has."
       />
 
       <div className="grid gap-3 lg:grid-cols-2">
@@ -129,7 +129,7 @@ function SettingsPage() {
               <div>
                 <p className="text-sm font-medium">Isolate new sites</p>
                 <p className="text-xs text-muted-foreground">
-                  Dedicated user, pool, and jail
+                  Dedicated system user, PHP-FPM pool, and home directory
                 </p>
               </div>
               <Switch

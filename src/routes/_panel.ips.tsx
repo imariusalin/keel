@@ -85,7 +85,7 @@ function IpsPage() {
       <PageHeader
         kicker="Network"
         title="IP addresses"
-        description="Add extra addresses on this box, then bind one to a site or Node app. Unassigned names keep the server’s primary IP."
+        description="Add extra addresses on this server, then bind one to a site or Node app. Unassigned names keep the server’s primary IP."
         action={
           <Button onClick={() => setOpen(true)}>
             <Plus className="size-4" />

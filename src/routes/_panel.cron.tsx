@@ -68,7 +68,7 @@ function CronPage() {
           command,
         },
       });
-      toast.success("Job scheduled — runs as the jail user");
+      toast.success("Job scheduled — runs as the site user");
       setOpen(false);
       setName("");
       setCommand("");
@@ -84,8 +84,8 @@ function CronPage() {
     <div>
       <PageHeader
         kicker="Schedule"
-        title="Cron"
-        description="Jobs run as the site or app user, inside that jail. Five-field cron. Written to /etc/cron.d/keel-jobs."
+        title="Cron jobs"
+        description="Jobs run as the site or app user, in that account’s home directory. Standard five-field cron, written to /etc/cron.d/keel-jobs."
         action={
           <Button onClick={() => setOpen(true)} disabled={sites.length + apps.length === 0}>
             <Plus className="size-4" />
@@ -102,7 +102,7 @@ function CronPage() {
               {sites.length + apps.length === 0 ? (
                 <>
                   Create a <Link to="/sites" className="text-foreground underline">site</Link>{" "}
-                  first, then schedule work inside its jail.
+                  first, then schedule work in its home directory.
                 </>
               ) : (
                 "No scheduled jobs yet."
@@ -165,7 +165,7 @@ function CronPage() {
           <DialogHeader>
             <DialogTitle>New cron job</DialogTitle>
             <DialogDescription>
-              Runs as {runAs || "the jail user"} with the working directory set to www or app.
+              Runs as {runAs || "the account user"} with the working directory set to www or app.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">

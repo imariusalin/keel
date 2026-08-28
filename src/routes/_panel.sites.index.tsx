@@ -68,7 +68,7 @@ function SitesPage() {
       <PageHeader
         kicker="PHP"
         title="Sites"
-        description="One user, one pool, one jail. Switch PHP versions without touching the others."
+        description="Each site gets its own system user and PHP-FPM pool. Switch PHP versions without touching the others."
         action={
           <Button onClick={() => setOpen(true)}>
             <Plus className="size-4" />
@@ -82,7 +82,7 @@ function SitesPage() {
           <CardContent className="flex flex-col items-center py-16 text-center">
             <Globe className="size-6 text-muted-foreground" />
             <p className="mt-3 text-sm text-muted-foreground">
-              No sites yet. Add a domain to get a jailed PHP pool.
+              No sites yet. Add a domain to create an isolated PHP site.
             </p>
           </CardContent>
         </Card>

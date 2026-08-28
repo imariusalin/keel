@@ -199,7 +199,7 @@ export function splitRel(rel: string): string[] {
   if (/^[a-zA-Z]:/.test(n)) throw new Error("Absolute path");
   const parts = n.split("/").filter((p) => p.length > 0 && p !== ".");
   if (parts.some((p) => p === ".." || p === "~")) {
-    throw new Error("Path escapes jail");
+    throw new Error("That path is outside this account");
   }
   return parts;
 }
@@ -240,7 +240,7 @@ const VIRT_ROOT_RE = /^\/home\/[a-z_][a-z0-9_-]{0,31}\/(www|app)$/;
 export function assertVirtRoot(root: string): string {
   const n = root.replace(/\\/g, "/");
   if (!VIRT_ROOT_RE.test(n)) {
-    throw new Error("Jail root is not a site or app home");
+    throw new Error("Home directory is not a site or app path");
   }
   return n;
 }

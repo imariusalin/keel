@@ -232,7 +232,7 @@ function FilesPage() {
   async function openEntry(entry: FileEntry) {
     if (!target) return;
     if (entry.unsafe) {
-      toast.error("This link points outside the jail");
+      toast.error("This link points outside the account");
       return;
     }
     if (entry.kind === "dir") {
@@ -437,15 +437,15 @@ function FilesPage() {
     return (
       <div>
         <PageHeader
-          kicker="Disk"
+          kicker="Hosting"
           title="Files"
-          description="Browse, edit, and upload inside each site jail and Node app directory."
+          description="Browse, edit, and upload inside each site or Node app home directory."
         />
         <Card>
           <CardContent className="flex flex-col items-center py-16 text-center">
             <FolderOpen className="size-6 text-muted-foreground" />
             <p className="mt-3 text-sm text-muted-foreground">
-              Create a site or a Node app first. Files live in that jail — never as root.
+              Create a site or a Node app first. Files live in that account — never as root.
             </p>
             <div className="mt-4 flex gap-2">
               <Button asChild variant="outline">
@@ -464,9 +464,9 @@ function FilesPage() {
   return (
     <div>
       <PageHeader
-        kicker="Disk"
+        kicker="Hosting"
         title="Files"
-        description="Jailed to the selected home. Hidden files stay visible — this is where .env and .htaccess live."
+        description="Limited to the selected home directory. Hidden files stay visible — this is where .env and .htaccess live."
         action={
           <div className="flex flex-wrap items-center gap-2">
             <Select
@@ -474,12 +474,12 @@ function FilesPage() {
               onValueChange={pickTarget}
             >
               <SelectTrigger className="w-[220px]">
-                <SelectValue placeholder="Choose a jail" />
+                <SelectValue placeholder="Choose a site or app" />
               </SelectTrigger>
               <SelectContent>
                 {targets.map((t) => (
                   <SelectItem key={`${t.kind}:${t.id}`} value={`${t.kind}:${t.id}`}>
-                    {t.kind === "site" ? "site" : "app"} · {t.label}
+                    {t.kind === "site" ? "Site" : "App"} · {t.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -895,7 +895,7 @@ function PromptDialog({
           <DialogTitle>{titles[prompt.kind]}</DialogTitle>
           <DialogDescription>
             {isDelete
-              ? `Remove ${prompt.paths.length === 1 ? prompt.paths[0] : `${prompt.paths.length} items`} from this jail. Directories go recursively.`
+              ? `Remove ${prompt.paths.length === 1 ? prompt.paths[0] : `${prompt.paths.length} items`} from this account. Directories go recursively.`
               : "Stays inside this site or app home."}
           </DialogDescription>
         </DialogHeader>

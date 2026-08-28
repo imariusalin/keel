@@ -2,7 +2,7 @@
 """Privileged file ops for the Keel panel. JSON on stdin, JSON on stdout.
 
 The panel user `keel` may sudo this binary with no password. Every path is
-jailed to /home/<site-or-app-user>/(www|app). New files are chowned to that user.
+restricted to /home/<site-or-app-user>/(www|app). New files are chowned to that user.
 """
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ def split_rel(rel: str) -> list[str]:
         raise ValueError("Absolute path")
     parts = [p for p in n.split("/") if p and p != "."]
     if any(p in ("..", "~") for p in parts):
-        raise ValueError("Path escapes jail")
+        raise ValueError("That path is outside this account")
     return parts
 
 
@@ -143,7 +143,7 @@ def join_jail(jail: str, rel: str) -> str:
     parts = split_rel(rel)
     resolved = os.path.abspath(os.path.join(jail, *parts) if parts else jail)
     if not inside(jail, resolved):
-        raise ValueError("Path escapes jail")
+        raise ValueError("That path is outside this account")
     return resolved
 
 
@@ -163,7 +163,7 @@ def iso(mtime: float) -> str:
 
 def assert_safe(jail: str, abs_path: str, must_exist: bool = False) -> os.stat_result | None:
     if not inside(jail, abs_path):
-        raise ValueError("Path escapes jail")
+        raise ValueError("That path is outside this account")
     try:
         st = os.lstat(abs_path)
     except FileNotFoundError:
@@ -173,7 +173,7 @@ def assert_safe(jail: str, abs_path: str, must_exist: bool = False) -> os.stat_r
     if stat.S_ISLNK(st.st_mode):
         real = os.path.realpath(abs_path)
         if not inside(jail, real):
-            raise ValueError("Symlink leaves the jail")
+            raise ValueError("This link points outside the account")
     return st
 
 
@@ -313,7 +313,7 @@ def op_mkdir(jail: str, rel: str, user: str) -> dict[str, Any]:
 
 def op_rename(jail: str, rel: str, to: str) -> dict[str, Any]:
     if virt_norm(rel) == "/":
-        raise ValueError("Cannot rename the jail root")
+        raise ValueError("Cannot rename the home directory")
     src = join_jail(jail, rel)
     dest = join_jail(jail, to)
     assert_safe(jail, src, must_exist=True)
@@ -324,7 +324,7 @@ def op_rename(jail: str, rel: str, to: str) -> dict[str, Any]:
 
 def op_delete(jail: str, rel: str) -> dict[str, Any]:
     if virt_norm(rel) == "/":
-        raise ValueError("Cannot delete the jail root")
+        raise ValueError("Cannot delete the home directory")
     abs_path = join_jail(jail, rel)
     assert_safe(jail, abs_path, must_exist=True)
     if os.path.isdir(abs_path) and not os.path.islink(abs_path):

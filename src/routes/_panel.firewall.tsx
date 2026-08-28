@@ -69,9 +69,9 @@ function FirewallPage() {
   return (
     <div>
       <PageHeader
-        kicker="Protect"
+        kicker="Security"
         title="Firewall"
-        description="Default deny inbound. Only listed ports answer. Fail2ban watches SSH and the panel."
+        description="Inbound traffic is denied by default. Only listed ports answer. Fail2ban watches SSH and the panel."
         action={
           <Button onClick={() => setOpen(true)}>
             <Plus className="size-4" />
@@ -97,7 +97,7 @@ function FirewallPage() {
           <CardContent className="flex items-center gap-3 p-5">
             <Shield className="size-4 text-ok" />
             <div>
-              <p className="text-sm font-medium">Jails</p>
+              <p className="text-sm font-medium">Fail2ban</p>
               <p className="text-xs text-muted-foreground">sshd · nginx-auth</p>
             </div>
           </CardContent>

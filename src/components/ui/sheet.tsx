@@ -31,7 +31,7 @@ export const SheetContent = React.forwardRef<
     <SheetPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed z-50 flex h-full w-72 flex-col bg-sidebar p-4 shadow-[var(--shadow-border)] transition-transform duration-300 ease-out",
+        "fixed z-50 flex h-full min-h-0 w-72 flex-col overflow-hidden bg-sidebar p-4 shadow-[var(--shadow-border)] transition-transform duration-300 ease-out",
         side === "left" ? "left-0 top-0" : "right-0 top-0",
         className,
       )}

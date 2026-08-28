@@ -33,7 +33,7 @@ type NavItem = {
 
 const NAV: { title: string; items: NavItem[] }[] = [
   {
-    title: "Operate",
+    title: "Hosting",
     items: [
       { to: "/", label: "Overview", icon: LayoutDashboard },
       { to: "/sites", label: "Sites", icon: Globe, module: "php" },
@@ -41,21 +41,21 @@ const NAV: { title: string; items: NavItem[] }[] = [
       { to: "/files", label: "Files", icon: FolderOpen },
       { to: "/mail", label: "Mail", icon: Mail, module: "mail" },
       { to: "/webmail", label: "Webmail", icon: Inbox, module: "mail" },
-      { to: "/cron", label: "Cron", icon: Clock },
+      { to: "/cron", label: "Cron jobs", icon: Clock },
       { to: "/redis", label: "Redis", icon: Database, module: "redis" },
     ],
   },
   {
-    title: "Protect",
+    title: "Security",
     items: [
       { to: "/firewall", label: "Firewall", icon: Shield, module: "firewall" },
       { to: "/dns", label: "DNS", icon: Server, module: "dns" },
-      { to: "/ips", label: "IPs", icon: Network },
+      { to: "/ips", label: "IP addresses", icon: Network },
       { to: "/backups", label: "Backups", icon: Archive },
     ],
   },
   {
-    title: "Extend",
+    title: "Server",
     items: [
       { to: "/modules", label: "Modules", icon: Puzzle },
       { to: "/settings", label: "Settings", icon: Settings },
@@ -73,15 +73,15 @@ function NavList({
   onNavigate?: () => void;
 }) {
   return (
-    <nav className="flex flex-col gap-6">
+    <nav className="flex flex-col gap-5">
       {NAV.map((group) => {
         const items = group.items.filter(
           (item) => !item.module || enabled.has(item.module),
         );
         if (items.length === 0) return null;
         return (
-          <div key={group.title} className="flex flex-col gap-1">
-            <p className="px-3 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+          <div key={group.title} className="flex flex-col gap-0.5">
+            <p className="px-3 pb-1 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
               {group.title}
             </p>
             {items.map((item) => {
@@ -96,7 +96,7 @@ function NavList({
                   to={item.to}
                   onClick={onNavigate}
                   className={cn(
-                    "flex h-11 items-center gap-2.5 rounded-md px-3 text-sm font-medium transition-colors duration-150",
+                    "flex h-9 items-center gap-2.5 rounded-md px-3 text-sm font-medium transition-colors duration-150",
                     active
                       ? "bg-accent text-foreground"
                       : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
@@ -150,12 +150,14 @@ function SidebarBody({
   onNavigate?: () => void;
 }) {
   return (
-    <div className="flex h-full flex-col">
-      <Brand />
-      <div className="mt-8 flex-1 overflow-y-auto">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0">
+        <Brand />
+      </div>
+      <div className="keel-sidebar-scroll mt-8 min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <NavList pathname={pathname} enabled={enabled} onNavigate={onNavigate} />
       </div>
-      <div className="pt-4">
+      <div className="shrink-0 pt-4">
         <ServerChip hostname={settings.hostname} />
         <div className="mt-3 px-1">
           <UserButton />
@@ -178,7 +180,7 @@ export function Shell({
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
-      <aside className="fixed inset-y-0 left-0 hidden w-60 border-r border-border bg-sidebar p-4 md:flex md:flex-col">
+      <aside className="fixed inset-y-0 left-0 hidden w-60 overflow-hidden border-r border-border bg-sidebar p-4 md:flex md:flex-col">
         <SidebarBody
           pathname={pathname}
           settings={settings}
@@ -198,7 +200,7 @@ export function Shell({
           <Brand />
         </header>
         <Sheet open={open} onOpenChange={setOpen}>
-          <SheetContent side="left" className="w-72 bg-sidebar p-4">
+          <SheetContent side="left" className="w-72 bg-sidebar">
             <SidebarBody
               pathname={pathname}
               settings={settings}

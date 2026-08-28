@@ -49,14 +49,14 @@ describe("path jail", () => {
     assert.equal(virtParent("/"), null);
     assert.equal(virtJoin("/", "index.php"), "/index.php");
     assert.equal(virtJoin("/css", "app.css"), "/css/app.css");
-    assert.throws(() => splitRel("../etc/passwd"), /escapes/);
-    assert.throws(() => splitRel("foo/../../etc"), /escapes/);
+    assert.throws(() => splitRel("../etc/passwd"), /outside this account/);
+    assert.throws(() => splitRel("foo/../../etc"), /outside this account/);
     assert.throws(() => splitRel("foo\0bar"), /Invalid/);
     assert.throws(() => splitRel("C:\\Windows"), /Absolute/);
     assert.throws(() => assertEntryName("a/b"), /slashes/);
     assert.throws(() => assertEntryName(".."), /Invalid/);
-    assert.throws(() => assertVirtRoot("/etc/passwd"), /Jail root/);
-    assert.throws(() => assertVirtRoot("/home/../www"), /Jail root/);
+    assert.throws(() => assertVirtRoot("/etc/passwd"), /Home directory/);
+    assert.throws(() => assertVirtRoot("/home/../www"), /Home directory/);
     assert.equal(assertVirtRoot("/home/s_site/www"), "/home/s_site/www");
     assert.equal(appVirtRoot("API Example"), "/home/ka_api-example/app");
   });
@@ -65,7 +65,7 @@ describe("path jail", () => {
     await withJail(async (jail) => {
       assert.equal(joinJail(jail, "a/b"), join(jail, "a", "b"));
       assert.equal(joinJail(jail, "/"), jail);
-      assert.throws(() => joinJail(jail, "../outside"), /escapes/);
+      assert.throws(() => joinJail(jail, "../outside"), /outside this account/);
     });
   });
 });
@@ -127,8 +127,8 @@ describe("local file ops", () => {
 
   it("refuses to delete the jail root and blocks binary as text", async () => {
     await withJail(async (jail) => {
-      await assert.rejects(() => localDelete(jail, "/"), /jail root/);
-      await assert.rejects(() => localRename(jail, "/", "other"), /jail root/);
+      await assert.rejects(() => localDelete(jail, "/"), /home directory/);
+      await assert.rejects(() => localRename(jail, "/", "other"), /home directory/);
       await writeFile(join(jail, "blob.bin"), Buffer.from([0, 1, 2, 3, 0, 9]));
       await assert.rejects(() => localRead(jail, "blob.bin"), /Binary/);
       const down = await localRead(jail, "blob.bin", { binary: true });
@@ -147,7 +147,7 @@ describe("local file ops", () => {
         const listing = await localList(jail, "/");
         const leak = listing.entries.find((e) => e.name === "leak.txt");
         assert.equal(leak?.unsafe, true);
-        await assert.rejects(() => localRead(jail, "leak.txt"), /jail/);
+        await assert.rejects(() => localRead(jail, "leak.txt"), /outside the account/);
       } finally {
         await rm(outside, { recursive: true, force: true });
       }
@@ -162,7 +162,7 @@ describe("local file ops", () => {
       await localWrite(jail, "/css/ok.css", "x", "utf8");
       const body = await readFile(join(jail, "css", "ok.css"), "utf8");
       assert.equal(body, "x");
-      await assert.rejects(() => localWrite(jail, "/css/../secret", "x", "utf8"), /escapes/);
+      await assert.rejects(() => localWrite(jail, "/css/../secret", "x", "utf8"), /outside this account/);
       await localChmod(jail, "notes.txt", "0644").catch((err: unknown) => {
         if (process.platform !== "win32") throw err;
       });

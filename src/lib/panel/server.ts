@@ -47,7 +47,7 @@ const MODULES = [
   {
     slug: "firewall",
     name: "Firewall",
-    description: "Default-deny packet filter and intrusion jails.",
+    description: "Default-deny firewall and Fail2ban intrusion prevention.",
     version: "1.2",
     core: true,
     sort: 3,

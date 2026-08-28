@@ -18,9 +18,9 @@ function ModulesPage() {
   return (
     <div>
       <PageHeader
-        kicker="Extend"
+        kicker="Server"
         title="Modules"
-        description="Keel stays small. Enable only what this server needs. New packs drop in without a reinstall."
+        description="Enable only what this server needs. You can add more later without reinstalling."
       />
       <div className="grid gap-3 sm:grid-cols-2">
         {modules.map((mod) => (
