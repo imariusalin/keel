@@ -62,7 +62,7 @@ import {
   renameFile,
   uploadFile,
   writeFile,
-} from "@/lib/panel/files.server";
+} from "@/lib/panel/file-ops";
 import { cn } from "@/lib/utils";
 
 type FilesSearch = {

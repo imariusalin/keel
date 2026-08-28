@@ -12,7 +12,7 @@ import {
   clearWebmailSession,
   readWebmailSession,
   writeWebmailSession,
-} from "./session.server";
+} from "./session";
 import { buildMessage, sendSmtp } from "./smtp";
 
 const IMAP_HOST = "127.0.0.1";

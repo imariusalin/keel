@@ -32,7 +32,7 @@ import {
   runBackupJob,
   toggleBackupJob,
   updateBackupJob,
-} from "@/lib/panel/backup.server";
+} from "@/lib/panel/backups";
 import { CRON_PRESETS } from "@/lib/panel/net";
 import { formatSize } from "@/lib/panel/file-types";
 

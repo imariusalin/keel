@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { CRON_PRESETS } from "@/lib/panel/net";
-import { createCron, deleteCron, listCron, toggleCron } from "@/lib/panel/ops.server";
+import { createCron, deleteCron, listCron, toggleCron } from "@/lib/panel/ops";
 import { appSystemUser } from "@/lib/utils";
 
 export const Route = createFileRoute("/_panel/cron")({
